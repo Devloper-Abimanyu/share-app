@@ -9,6 +9,7 @@ import jwt from "jsonwebtoken";
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
+import { basename } from "node:path";
 import { Server } from "socket.io";
 
 const { Pool } = pg;
@@ -21,9 +22,15 @@ if (!jwtSecret || jwtSecret.length < 32) {
   throw new Error("JWT_SECRET must be set to a random value of at least 32 characters.");
 }
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL ?? "postgres://chat:chat@localhost:5432/chatapp",
-});
+const pool = new Pool(process.env.DATABASE_URL
+  ? { connectionString: process.env.DATABASE_URL }
+  : {
+      host: process.env.PGHOST ?? "localhost",
+      port: Number(process.env.PGPORT ?? 5433),
+      database: process.env.PGDATABASE ?? "chatapp",
+      user: process.env.PGUSER ?? "chat",
+      password: process.env.PGPASSWORD ?? "chat",
+    });
 pool.on("error", (error) => console.error("Unexpected PostgreSQL pool error:", error));
 
 const app = express();
@@ -58,7 +65,12 @@ const asyncRoute = (handler) => (req, res, next) =>
 
 const issueToken = (user) =>
   jwt.sign(
-    { sub: user.id, username: user.username, displayName: user.display_name },
+    {
+      sub: user.id,
+      username: user.username,
+      displayName: user.display_name,
+      ver: user.auth_version ?? 0,
+    },
     jwtSecret,
     { expiresIn: tokenLifetime },
   );
@@ -67,6 +79,7 @@ const publicUser = (user) => ({
   id: user.id,
   username: user.username,
   displayName: user.display_name,
+  role: user.role,
 });
 
 const cookieOptions = {
@@ -86,7 +99,7 @@ async function authenticate(req, res, next) {
     let result;
     try {
       result = await pool.query(
-        "SELECT id, username, display_name FROM users WHERE id = $1",
+        "SELECT id, username, display_name, role, auth_version FROM users WHERE id = $1",
         [payload.sub],
       );
     } catch (error) {
@@ -94,6 +107,9 @@ async function authenticate(req, res, next) {
       return next(new Error("Chat service is unavailable."));
     }
     if (!result.rowCount) return res.status(401).json({ error: "Your session has expired." });
+    if ((payload.ver ?? 0) !== result.rows[0].auth_version) {
+      return res.status(401).json({ error: "Your session has expired." });
+    }
     req.user = result.rows[0];
     next();
   } catch (error) {
@@ -102,6 +118,13 @@ async function authenticate(req, res, next) {
     }
     next(error);
   }
+}
+
+function requireAdmin(req, res, next) {
+  if (req.user.role !== "admin") {
+    return res.status(403).json({ error: "Administrator access is required." });
+  }
+  next();
 }
 
 async function withTransaction(work) {
@@ -132,42 +155,15 @@ app.get("/api/health", asyncRoute(async (_req, res) => {
   res.json({ status: "ok" });
 }));
 
-app.post("/api/auth/register", authLimiter, asyncRoute(async (req, res) => {
-  const username = String(req.body.username ?? "").trim().toLowerCase();
-  const displayName = String(req.body.displayName ?? "").trim();
-  const password = String(req.body.password ?? "");
-
-  if (!/^[a-z0-9_]{3,24}$/.test(username)) {
-    return res.status(400).json({ error: "Username must be 3–24 letters, numbers, or underscores." });
-  }
-  if (displayName.length < 1 || displayName.length > 48) {
-    return res.status(400).json({ error: "Display name must be between 1 and 48 characters." });
-  }
-  if (password.length < 8 || password.length > 72) {
-    return res.status(400).json({ error: "Password must be between 8 and 72 characters." });
-  }
-
-  const passwordHash = await bcrypt.hash(password, 12);
-  try {
-    const result = await pool.query(
-      `INSERT INTO users (username, display_name, password_hash)
-       VALUES ($1, $2, $3)
-       RETURNING id, username, display_name`,
-      [username, displayName, passwordHash],
-    );
-    const user = result.rows[0];
-    res.cookie(cookieName, issueToken(user), cookieOptions).status(201).json({ user: publicUser(user) });
-  } catch (error) {
-    if (error.code === "23505") return res.status(409).json({ error: "That username is already taken." });
-    throw error;
-  }
-}));
+app.post("/api/auth/register", (_req, res) => {
+  res.status(403).json({ error: "Account creation is restricted to administrators." });
+});
 
 app.post("/api/auth/login", authLimiter, asyncRoute(async (req, res) => {
   const username = String(req.body.username ?? "").trim().toLowerCase();
   const password = String(req.body.password ?? "");
   const result = await pool.query(
-    "SELECT id, username, display_name, password_hash FROM users WHERE username = $1",
+    "SELECT id, username, display_name, role, auth_version, password_hash FROM users WHERE username = $1",
     [username],
   );
   const user = result.rows[0];
@@ -184,6 +180,86 @@ app.post("/api/auth/logout", (_req, res) => {
 app.get("/api/me", authenticate, (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
+
+app.get("/api/admin/users", authenticate, requireAdmin, asyncRoute(async (_req, res) => {
+  const result = await pool.query(
+    "SELECT id, username, display_name, role, created_at FROM users ORDER BY created_at",
+  );
+  res.json({ users: result.rows.map(publicUser) });
+}));
+
+app.post("/api/admin/users", authenticate, requireAdmin, asyncRoute(async (req, res) => {
+  const username = String(req.body.username ?? "").trim().toLowerCase();
+  const displayName = String(req.body.displayName ?? "").trim();
+  const password = String(req.body.password ?? "");
+  if (!/^[a-z0-9_]{3,24}$/.test(username)) {
+    return res.status(400).json({ error: "Username must be 3–24 letters, numbers, or underscores." });
+  }
+  if (displayName.length < 1 || displayName.length > 48) {
+    return res.status(400).json({ error: "Display name must be between 1 and 48 characters." });
+  }
+  if (password.length < 8 || password.length > 72) {
+    return res.status(400).json({ error: "Password must be between 8 and 72 characters." });
+  }
+  try {
+    const passwordHash = await bcrypt.hash(password, 12);
+    const result = await pool.query(
+      `INSERT INTO users (username, display_name, password_hash)
+       VALUES ($1, $2, $3)
+       RETURNING id, username, display_name, role, created_at`,
+      [username, displayName, passwordHash],
+    );
+    res.status(201).json({ user: publicUser(result.rows[0]) });
+  } catch (error) {
+    if (error.code === "23505") return res.status(409).json({ error: "That username is already taken." });
+    throw error;
+  }
+}));
+
+app.patch("/api/admin/users/:userId", authenticate, requireAdmin, asyncRoute(async (req, res) => {
+  const username = String(req.body.username ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.params.userId)) {
+    return res.status(400).json({ error: "Choose a valid account." });
+  }
+  if (!/^[a-z0-9_]{3,24}$/.test(username)) {
+    return res.status(400).json({ error: "Username must be 3–24 letters, numbers, or underscores." });
+  }
+  try {
+    const result = await pool.query(
+      `UPDATE users SET username = $1
+       WHERE id = $2
+       RETURNING id, username, display_name, role, created_at`,
+      [username, req.params.userId],
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "That account could not be found." });
+    res.json({ user: publicUser(result.rows[0]) });
+  } catch (error) {
+    if (error.code === "23505") return res.status(409).json({ error: "That username is already taken." });
+    throw error;
+  }
+}));
+
+app.put("/api/admin/users/:userId/password", authenticate, requireAdmin, asyncRoute(async (req, res) => {
+  const password = String(req.body.password ?? "");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.params.userId)) {
+    return res.status(400).json({ error: "Choose a valid account." });
+  }
+  if (password.length < 8 || password.length > 72) {
+    return res.status(400).json({ error: "Passwords must be between 8 and 72 characters." });
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  const result = await pool.query(
+    `UPDATE users SET password_hash = $1, auth_version = auth_version + 1
+     WHERE id = $2
+     RETURNING id, auth_version`,
+    [passwordHash, req.params.userId],
+  );
+  if (!result.rowCount) return res.status(404).json({ error: "That account could not be found." });
+  if (req.params.userId === req.user.id) {
+    res.cookie(cookieName, issueToken({ ...req.user, auth_version: result.rows[0].auth_version }), cookieOptions);
+  }
+  res.json({ updated: true });
+}));
 
 app.get("/api/users", authenticate, asyncRoute(async (req, res) => {
   const search = String(req.query.search ?? "").trim().slice(0, 60);
@@ -310,12 +386,17 @@ app.get("/api/chats/:chatId/messages", authenticate, asyncRoute(async (req, res)
     `SELECT m.id, m.chat_id, m.text, m.created_at,
        json_build_object(
          'id', u.id, 'username', u.username, 'displayName', u.display_name
-       ) AS sender
+       ) AS sender,
+       CASE WHEN a.message_id IS NULL THEN NULL ELSE json_build_object(
+         'fileName', a.file_name, 'contentType', a.content_type, 'size', a.byte_size,
+         'downloadUrl', '/api/files/' || m.id
+       ) END AS attachment
      FROM (
        SELECT * FROM messages WHERE chat_id = $1
        ORDER BY created_at DESC LIMIT 100
      ) m
      JOIN users u ON u.id = m.sender_id
+     LEFT JOIN message_attachments a ON a.message_id = m.id
      ORDER BY m.created_at ASC`,
     [req.params.chatId],
   );
@@ -341,12 +422,94 @@ app.post("/api/chats/:chatId/messages", authenticate, asyncRoute(async (req, res
   res.status(201).json({ message });
 }));
 
+app.post(
+  "/api/chats/:chatId/files",
+  authenticate,
+  express.raw({ type: "*/*", limit: "10mb" }),
+  asyncRoute(async (req, res) => {
+    if (!(await hasChatAccess(req.params.chatId, req.user.id))) {
+      return res.status(404).json({ error: "Conversation not found." });
+    }
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: "Choose a non-empty file to share." });
+    }
+    let fileName;
+    try {
+      fileName = decodeURIComponent(String(req.get("X-File-Name") ?? ""));
+    } catch {
+      return res.status(400).json({ error: "The file name is invalid." });
+    }
+    fileName = basename(fileName.replace(/\\/g, "/"))
+      .replace(/[\u0000-\u001f\u007f]/g, "_")
+      .trim()
+      .slice(0, 255);
+    if (!fileName) return res.status(400).json({ error: "The file name is invalid." });
+    const requestedType = String(req.get("Content-Type") ?? "").split(";")[0].trim().toLowerCase();
+    const contentType = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(requestedType)
+      ? requestedType
+      : "application/octet-stream";
+
+    const message = await withTransaction(async (client) => {
+      const created = await client.query(
+        `INSERT INTO messages (chat_id, sender_id, text)
+         VALUES ($1, $2, $3)
+         RETURNING id, chat_id, text, created_at`,
+        [req.params.chatId, req.user.id, `Shared a file: ${fileName}`],
+      );
+      await client.query(
+        `INSERT INTO message_attachments (message_id, file_name, content_type, byte_size, data)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [created.rows[0].id, fileName, contentType, req.body.length, req.body],
+      );
+      return {
+        ...created.rows[0],
+        sender: publicUser(req.user),
+        attachment: {
+          fileName,
+          contentType,
+          size: req.body.length,
+          downloadUrl: `/api/files/${created.rows[0].id}`,
+        },
+      };
+    });
+    io.to(req.params.chatId).emit("message:new", message);
+    res.status(201).json({ message });
+  }),
+);
+
+app.get("/api/files/:messageId", authenticate, asyncRoute(async (req, res) => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.params.messageId)) {
+    return res.status(404).json({ error: "File not found." });
+  }
+  const result = await pool.query(
+    `SELECT a.file_name, a.data, a.byte_size
+     FROM message_attachments a
+     JOIN messages m ON m.id = a.message_id
+     JOIN chat_members cm ON cm.chat_id = m.chat_id
+     WHERE a.message_id = $1 AND cm.user_id = $2`,
+    [req.params.messageId, req.user.id],
+  );
+  if (!result.rowCount) return res.status(404).json({ error: "File not found." });
+  const file = result.rows[0];
+  res.attachment(file.file_name);
+  res.type("application/octet-stream");
+  res.set({
+    "Content-Length": String(file.byte_size),
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.send(file.data);
+}));
+
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
 });
 
 app.use((error, _req, res, _next) => {
   console.error(error);
+  if (error.type === "entity.too.large") {
+    return res.status(413).json({ error: "Files must be 10 MB or smaller." });
+  }
   res.status(500).json({ error: "Something went wrong. Please try again." });
 });
 
@@ -387,10 +550,12 @@ io.use(async (socket, next) => {
     return next(error);
   }
   const result = await pool.query(
-    "SELECT id, username, display_name FROM users WHERE id = $1",
+    "SELECT id, username, display_name, role, auth_version FROM users WHERE id = $1",
     [payload.sub],
   );
-  if (!result.rowCount) return next(new Error("Authentication required."));
+  if (!result.rowCount || (payload.ver ?? 0) !== result.rows[0].auth_version) {
+    return next(new Error("Authentication required."));
+  }
   socket.data.user = result.rows[0];
   next();
 });
@@ -631,8 +796,13 @@ async function start() {
       username varchar(24) NOT NULL UNIQUE,
       display_name varchar(48) NOT NULL,
       password_hash text NOT NULL,
+      role text NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+      auth_version integer NOT NULL DEFAULT 0,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user'
+      CHECK (role IN ('admin', 'user'));
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_version integer NOT NULL DEFAULT 0;
     CREATE TABLE IF NOT EXISTS chats (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       kind text NOT NULL CHECK (kind IN ('direct', 'group')),
@@ -652,11 +822,45 @@ async function start() {
       text varchar(4000) NOT NULL CHECK (length(trim(text)) > 0),
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS message_attachments (
+      message_id uuid PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      file_name varchar(255) NOT NULL,
+      content_type varchar(128) NOT NULL,
+      byte_size integer NOT NULL CHECK (byte_size > 0),
+      data bytea NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS messages_chat_created_idx
       ON messages(chat_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS chat_members_user_idx
       ON chat_members(user_id, chat_id);
   `);
+  const adminUsername = String(process.env.ADMIN_USERNAME ?? "").trim().toLowerCase();
+  const adminPassword = String(process.env.ADMIN_PASSWORD ?? "");
+  if (Boolean(adminUsername) !== Boolean(adminPassword)) {
+    throw new Error("Set both ADMIN_USERNAME and ADMIN_PASSWORD to bootstrap the first admin.");
+  }
+  if (!adminUsername) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("ADMIN_USERNAME and ADMIN_PASSWORD are required in production.");
+    }
+    console.warn("No admin bootstrap configured; set ADMIN_USERNAME and ADMIN_PASSWORD to manage accounts.");
+  } else {
+    if (!/^[a-z0-9_]{3,24}$/.test(adminUsername) || adminPassword.length < 12 || adminPassword.length > 72) {
+      throw new Error("ADMIN_USERNAME must be valid and ADMIN_PASSWORD must be 12–72 characters.");
+    }
+    const existing = await pool.query("SELECT role FROM users WHERE username = $1", [adminUsername]);
+    if (!existing.rowCount) {
+      const passwordHash = await bcrypt.hash(adminPassword, 12);
+      await pool.query(
+        `INSERT INTO users (username, display_name, password_hash, role)
+         VALUES ($1, $1, $2, 'admin')`,
+        [adminUsername, passwordHash],
+      );
+      console.log(`Bootstrapped administrator account "${adminUsername}".`);
+    } else if (existing.rows[0].role !== "admin") {
+      throw new Error("ADMIN_USERNAME belongs to a non-admin account; choose a different username.");
+    }
+  }
   httpServer.listen(port, "0.0.0.0", () => {
     console.log(`Orbit server listening on http://localhost:${port}`);
   });

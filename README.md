@@ -4,9 +4,9 @@ Orbit is a responsive, real-time chat app MVP built around a simple idea: keep g
 
 ## Run locally
 
-Requirements: Node.js 20.19+ (or 22.12+) and Docker.
+Requirements: Node.js 20.19+ (or 22.12+) and either Docker or PostgreSQL.
 
-1. Copy the environment template and set a random JWT secret of at least 32 characters:
+1. Copy the environment template and set a random JWT secret of at least 32 characters and first-admin username/password. The admin password must be 12–72 characters:
 
    ```powershell
    Copy-Item .env.example .env
@@ -18,6 +18,8 @@ Requirements: Node.js 20.19+ (or 22.12+) and Docker.
    docker compose up -d postgres
    ```
 
+   To use an existing PostgreSQL server instead, leave `DATABASE_URL` empty in `.env` and set `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` to that server's connection settings. Keep the password in `.env` and do not commit it. The target database must already exist; the app creates its tables on startup.
+
 3. Install dependencies and start the app:
 
    ```powershell
@@ -25,7 +27,7 @@ Requirements: Node.js 20.19+ (or 22.12+) and Docker.
    npm run dev
    ```
 
-4. Open [http://localhost:5173](http://localhost:5173) and create an account. Create another account in a separate browser profile to try live one-to-one and group chats.
+4. Open [http://localhost:5173](http://localhost:5173) and sign in with the configured admin credentials. Use **Admin tools** to create accounts; public registration is disabled.
 
 The database container is exposed on host port 5433 to avoid colliding with a local PostgreSQL service. The server creates its database tables on startup. The API and Socket.IO server run on port 3001; Vite proxies browser requests to it during development.
 
@@ -36,14 +38,14 @@ npm run build
 npm start
 ```
 
-Set `NODE_ENV=production`, `DATABASE_URL`, `JWT_SECRET`, `PORT`, and `CLIENT_ORIGIN` in the deployment environment. Serve the built `dist` directory with a static host or reverse proxy, and use HTTPS so session cookies remain secure.
+Set `NODE_ENV=production`, `DATABASE_URL`, `JWT_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `PORT`, and `CLIENT_ORIGIN` in the deployment environment. Serve the built `dist` directory with a static host or reverse proxy, and use HTTPS so session cookies remain secure.
 
 ### Deploy with Cloudflare and Render
 
 Cloudflare hosts the static frontend; the Node.js API and PostgreSQL database must run separately. This repository includes a Render Blueprint in `render.yaml` for the API and database.
 
-1. In Render, create a new Blueprint from this GitHub repository and deploy it. The Blueprint generates a `JWT_SECRET`, connects the API to PostgreSQL, and allows the Cloudflare site origin. The free PostgreSQL plan is for testing and may have usage or expiration limits; check Render's current plan details before storing important data.
-2. In your Cloudflare Workers & Pages project, add the build environment variable `VITE_API_URL` with the public URL Render assigned to `orbit-chat-api` (for example, `https://orbit-chat-api.onrender.com`). Set it for production and preview if you use both, then trigger a fresh deployment so Vite includes it in the frontend build.
+1. In Render, create or sync the Blueprint from this GitHub repository and deploy it. The Blueprint generates a `JWT_SECRET` and first-admin password, connects the API to PostgreSQL, and allows the Cloudflare site origin. The admin username is `orbitadmin`; retrieve the generated `ADMIN_PASSWORD` from the Render service environment settings. The free PostgreSQL plan is for testing and may have usage or expiration limits; check Render's current plan details before storing important data.
+2. The frontend defaults to `https://orbit-chat-api.onrender.com` in production. If Render assigned a different URL, set the Cloudflare Workers & Pages build environment variable `VITE_API_URL` to that public API URL for production and preview as needed, then trigger a fresh deployment so Vite includes it in the frontend build.
 3. If your Cloudflare site uses a different domain, update Render's `CLIENT_ORIGIN` to that exact origin and redeploy the API. The Blueprint sets `COOKIE_SAME_SITE=none` for cross-site session cookies; both sites must use HTTPS.
 4. Open `https://<your-api-host>/api/health`. It should return JSON such as `{"status":"ok"}`. Then reload the Cloudflare site and try registering an account.
 
@@ -55,4 +57,4 @@ Start a voice or video call from a conversation header. Group calls support up t
 
 Calls use peer-to-peer WebRTC with a public STUN server. Some networks require a TURN relay to connect; production deployments should configure a trusted TURN service and review its access, privacy, and cost policies. The development setup does not include TURN.
 
-Messages are stored in PostgreSQL and delivered live to connected members. This MVP does not provide end-to-end encryption, file uploads, push notifications, or message editing/deletion. Do not use it for sensitive conversations without a security review and a production deployment plan.
+Messages and shared files (up to 10 MB each) are stored in PostgreSQL and delivered to conversation members. Admins can create accounts, change usernames, and reset passwords; password resets revoke existing sessions. This MVP does not provide end-to-end encryption, push notifications, or message editing/deletion. Do not use it for sensitive conversations without a security review and a production deployment plan.

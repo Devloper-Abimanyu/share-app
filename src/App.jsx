@@ -6,21 +6,30 @@ import {
   Check,
   CheckCheck,
   CircleHelp,
+  Download,
+  FileText,
+  KeyRound,
   MessageCircle,
   MessageSquarePlus,
   MoreHorizontal,
+  Paperclip,
   Phone,
   Search,
   Send,
+  Shield,
   Smile,
   Sparkles,
   Users,
+  UserPlus,
   Video,
   X,
 } from "lucide-react";
 import CallOverlay from "./CallOverlay.jsx";
 
-const apiBaseUrl = (import.meta.env.VITE_API_URL ?? "").replace(/\/+$/, "");
+const apiBaseUrl = (
+  import.meta.env.VITE_API_URL
+  || (import.meta.env.PROD ? "https://orbit-chat-api.onrender.com" : "")
+).replace(/\/+$/, "");
 
 async function api(path, options = {}) {
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -71,8 +80,7 @@ function Avatar({ name, online = false, size = "normal" }) {
 }
 
 function AuthScreen({ onAuthenticated }) {
-  const [mode, setMode] = useState("login");
-  const [form, setForm] = useState({ username: "", displayName: "", password: "" });
+  const [form, setForm] = useState({ username: "", password: "" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -81,8 +89,7 @@ function AuthScreen({ onAuthenticated }) {
     setError("");
     setBusy(true);
     try {
-      const path = mode === "login" ? "/api/auth/login" : "/api/auth/register";
-      const data = await api(path, {
+      const data = await api("/api/auth/login", {
         method: "POST",
         body: JSON.stringify(form),
       });
@@ -94,11 +101,6 @@ function AuthScreen({ onAuthenticated }) {
     }
   }
 
-  function changeMode(nextMode) {
-    setMode(nextMode);
-    setError("");
-  }
-
   return (
     <main className="auth-page">
       <section className="auth-card">
@@ -108,29 +110,12 @@ function AuthScreen({ onAuthenticated }) {
         </a>
         <div className="auth-intro">
           <span className="eyebrow"><Sparkles size={14} /> YOUR PEOPLE, IN ORBIT</span>
-          <h1>{mode === "login" ? "Good to see you." : "Make yourself at home."}</h1>
-          <p>
-            {mode === "login"
-              ? "Sign in and pick up right where the conversation left off."
-              : "A little space for the conversations that matter."}
-          </p>
+          <h1>Good to see you.</h1>
+          <p>Sign in and pick up right where the conversation left off.</p>
         </div>
         <form className="auth-form" onSubmit={submit}>
-          {mode === "register" && (
-            <label>
-              Your name
-              <input
-                autoComplete="name"
-                maxLength={48}
-                onChange={(event) => setForm({ ...form, displayName: event.target.value })}
-                placeholder="How people know you"
-                required
-                value={form.displayName}
-              />
-            </label>
-          )}
           <label>
-            Username
+            Username ID
             <input
               autoComplete="username"
               maxLength={24}
@@ -143,9 +128,9 @@ function AuthScreen({ onAuthenticated }) {
           <label>
             Password
             <input
-              autoComplete={mode === "login" ? "current-password" : "new-password"}
+              autoComplete="current-password"
               onChange={(event) => setForm({ ...form, password: event.target.value })}
-              placeholder="At least 8 characters"
+              placeholder="Your password"
               required
               type="password"
               value={form.password}
@@ -153,19 +138,11 @@ function AuthScreen({ onAuthenticated }) {
           </label>
           {error && <p className="form-error" role="alert">{error}</p>}
           <button className="primary-button auth-submit" disabled={busy} type="submit">
-            {busy ? "One moment…" : mode === "login" ? "Sign in" : "Create account"}
+            {busy ? "One moment…" : "Sign in"}
             {!busy && <ArrowUp size={17} className="arrow-diagonal" />}
           </button>
         </form>
-        <p className="auth-switch">
-          {mode === "login" ? "New around here?" : "Already have an account?"}
-          <button
-            onClick={() => changeMode(mode === "login" ? "register" : "login")}
-            type="button"
-          >
-            {mode === "login" ? "Create an account" : "Sign in"}
-          </button>
-        </p>
+        <p className="auth-switch">Need an account? Ask an administrator to create one.</p>
         <div className="auth-footnote"><span /> Your conversations stay between you and your people.</div>
       </section>
       <aside className="auth-art" aria-hidden="true">
@@ -181,6 +158,139 @@ function AuthScreen({ onAuthenticated }) {
         <div className="art-caption">A little corner of the internet, just for your people.</div>
       </aside>
     </main>
+  );
+}
+
+function AdminPanel({ onClose, onUsersChanged, currentUserId }) {
+  const [users, setUsers] = useState([]);
+  const [usernameDrafts, setUsernameDrafts] = useState({});
+  const [passwordDrafts, setPasswordDrafts] = useState({});
+  const [form, setForm] = useState({ username: "", displayName: "", password: "" });
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api("/api/admin/users")
+      .then(({ users: results }) => {
+        setUsers(results);
+        setUsernameDrafts(Object.fromEntries(results.map((user) => [user.id, user.username])));
+      })
+      .catch((requestError) => setError(requestError.message));
+  }, []);
+
+  async function createUser(event) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      const { user } = await api("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify(form),
+      });
+      setUsers((current) => [...current, user]);
+      setUsernameDrafts((current) => ({ ...current, [user.id]: user.username }));
+      setForm({ username: "", displayName: "", password: "" });
+      setNotice(`Account ${user.username} created.`);
+      onUsersChanged();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateUsername(userId) {
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      const { user } = await api(`/api/admin/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ username: usernameDrafts[userId] }),
+      });
+      setUsers((current) => current.map((item) => item.id === userId ? user : item));
+      setUsernameDrafts((current) => ({ ...current, [userId]: user.username }));
+      setNotice(`Username updated to ${user.username}.`);
+      onUsersChanged();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetPassword(userId) {
+    const password = passwordDrafts[userId] ?? "";
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      await api(`/api/admin/users/${userId}/password`, {
+        method: "PUT",
+        body: JSON.stringify({ password }),
+      });
+      setPasswordDrafts((current) => ({ ...current, [userId]: "" }));
+      setNotice(userId === currentUserId
+        ? "Password reset. Other sessions for your account were signed out."
+        : "Password reset. Existing sessions for that account were signed out.");
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="admin-modal" aria-labelledby="admin-title" aria-modal="true" role="dialog">
+        <header>
+          <div><span className="eyebrow">ACCOUNT ACCESS</span><h2 id="admin-title">Admin tools</h2></div>
+          <button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button>
+        </header>
+        <form className="admin-create-form" onSubmit={createUser}>
+          <strong><UserPlus size={16} /> Create account</strong>
+          <label>Username ID<input autoComplete="off" maxLength={24} onChange={(event) => setForm({ ...form, username: event.target.value })} required value={form.username} /></label>
+          <label>Display name<input autoComplete="off" maxLength={48} onChange={(event) => setForm({ ...form, displayName: event.target.value })} required value={form.displayName} /></label>
+          <label>Temporary password<input autoComplete="new-password" minLength={8} onChange={(event) => setForm({ ...form, password: event.target.value })} required type="password" value={form.password} /></label>
+          <button className="primary-button" disabled={busy} type="submit">{busy ? "Saving…" : "Create account"}</button>
+        </form>
+        <div className="admin-user-list">
+          <strong>Manage accounts</strong>
+          {users.map((user) => (
+            <div className="admin-user-row" key={user.id}>
+              <span className="admin-user-name">{user.displayName}{user.role === "admin" ? " · admin" : ""}</span>
+              <div className="admin-user-actions">
+                <input
+                  aria-label={`Username ID for ${user.displayName}`}
+                  maxLength={24}
+                  onChange={(event) => setUsernameDrafts({ ...usernameDrafts, [user.id]: event.target.value })}
+                  value={usernameDrafts[user.id] ?? user.username}
+                />
+                <button className="icon-button" disabled={busy || usernameDrafts[user.id] === user.username} onClick={() => updateUsername(user.id)} title="Update username ID" type="button">
+                  <Shield size={15} />
+                </button>
+                <input
+                  aria-label={`New password for ${user.displayName}`}
+                  autoComplete="new-password"
+                  minLength={8}
+                  onChange={(event) => setPasswordDrafts({ ...passwordDrafts, [user.id]: event.target.value })}
+                  placeholder="New password"
+                  type="password"
+                  value={passwordDrafts[user.id] ?? ""}
+                />
+                <button className="icon-button" disabled={busy || (passwordDrafts[user.id] ?? "").length < 8} onClick={() => resetPassword(user.id)} title="Reset password" type="button">
+                  <KeyRound size={15} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        {notice && <p className="admin-notice" role="status">{notice}</p>}
+      </section>
+    </div>
   );
 }
 
@@ -214,6 +324,12 @@ function formatTime(dateString) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function Sidebar({
   user,
   chats,
@@ -223,6 +339,7 @@ function Sidebar({
   onStartDirect,
   onNewGroup,
   onLogout,
+  onManageUsers,
   online,
   mode,
   onModeChange,
@@ -240,9 +357,16 @@ function Sidebar({
           <span className="brand-mark"><MessageCircle size={19} fill="currentColor" /></span>
           <span>orbit<span className="brand-period">.</span></span>
         </a>
-        <button className="icon-button profile-button" onClick={onLogout} title={`Sign out ${user.displayName}`} aria-label="Sign out">
-          <Avatar name={user.displayName} size="small" />
-        </button>
+        <div className="sidebar-header-actions">
+          {user.role === "admin" && (
+            <button className="icon-button" onClick={onManageUsers} title="Admin tools" aria-label="Admin tools">
+              <Shield size={18} />
+            </button>
+          )}
+          <button className="icon-button profile-button" onClick={onLogout} title={`Sign out ${user.displayName}`} aria-label="Sign out">
+            <Avatar name={user.displayName} size="small" />
+          </button>
+        </div>
       </header>
       <div className="sidebar-greeting">
         <span className="eyebrow">YOUR LITTLE CORNER</span>
@@ -393,10 +517,11 @@ function GroupModal({ people, onClose, onCreate }) {
   );
 }
 
-function ChatView({ chat, user, online, messages, onSend, onBack, onStartCall, loading, error }) {
+function ChatView({ chat, user, online, messages, onSend, onUploadFile, uploading, onBack, onStartCall, loading, error }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const endRef = useRef(null);
+  const fileInputRef = useRef(null);
   const title = chatName(chat);
   const person = chat.kind === "direct" ? chat.members?.[0] : null;
 
@@ -471,7 +596,16 @@ function ChatView({ chat, user, online, messages, onSend, onBack, onStartCall, l
               <div className="message-content">
                 {!mine && chat.kind === "group" && !grouped && <span className="message-author">{message.sender.displayName}</span>}
                 <div className="message-bubble">
-                  <p>{message.text}</p>
+                  {message.attachment ? (
+                    <a className="message-file" download href={`${apiBaseUrl}${message.attachment.downloadUrl}`}>
+                      <FileText size={17} />
+                      <span>
+                        <strong>{message.attachment.fileName}</strong>
+                        <small>{formatFileSize(message.attachment.size)}</small>
+                      </span>
+                      <Download size={15} />
+                    </a>
+                  ) : <p>{message.text}</p>}
                   <span className="message-time">
                     {formatTime(message.created_at)}
                     {mine && <CheckCheck size={14} />}
@@ -486,6 +620,27 @@ function ChatView({ chat, user, online, messages, onSend, onBack, onStartCall, l
       <form className="composer" onSubmit={submit}>
         <div className="composer-box">
           <button className="composer-tool" type="button" aria-label="Emoji picker (coming soon)" title="Emoji picker coming soon"><Smile size={19} /></button>
+          <input
+            accept="*/*"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) onUploadFile(file);
+            }}
+            ref={fileInputRef}
+            type="file"
+          />
+          <button
+            className="composer-tool"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+            type="button"
+            aria-label={uploading ? "Uploading file" : "Share a file"}
+            title={uploading ? "Uploading file…" : "Share a file (10 MB max)"}
+          >
+            <Paperclip size={18} />
+          </button>
           <textarea
             aria-label="Write a message"
             maxLength={4000}
@@ -537,6 +692,8 @@ function ChatApp({ user, onLogout, appError }) {
   const [messageLoading, setMessageLoading] = useState(false);
   const [messageError, setMessageError] = useState("");
   const [showGroup, setShowGroup] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const [sidebarMode, setSidebarMode] = useState("chats");
   const [socket, setSocket] = useState(null);
   const [call, setCall] = useState(null);
@@ -660,6 +817,33 @@ function ChatApp({ user, onLogout, appError }) {
     }
   }
 
+  async function uploadFile(file) {
+    setMessageError("");
+    if (file.size > 10 * 1024 * 1024) {
+      setMessageError("Files must be 10 MB or smaller.");
+      return;
+    }
+    setUploadingFile(true);
+    try {
+      const data = await api(`/api/chats/${selectedChatId}/files`, {
+        method: "POST",
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          "X-File-Name": encodeURIComponent(file.name),
+        },
+        body: file,
+      });
+      setMessages((current) => current.some((message) => message.id === data.message.id)
+        ? current
+        : [...current, data.message]);
+      loadChats().catch((error) => setMessageError(error.message));
+    } catch (error) {
+      setMessageError(error.message);
+    } finally {
+      setUploadingFile(false);
+    }
+  }
+
   function startCall(mode) {
     if (!socket?.connected) {
       setMessageError("Connecting to the call service. Please try again in a moment.");
@@ -684,6 +868,7 @@ function ChatApp({ user, onLogout, appError }) {
     <main className="app-shell">
       <Sidebar
         chats={chats}
+        onManageUsers={() => setShowAdmin(true)}
         onLogout={onLogout}
         onNewGroup={() => setShowGroup(true)}
         onSelectChat={setSelectedChatId}
@@ -702,16 +887,25 @@ function ChatApp({ user, onLogout, appError }) {
           key={selectedChatId}
           loading={messageLoading}
           messages={messages}
+          onUploadFile={uploadFile}
           onBack={() => setSelectedChatId(null)}
           onStartCall={startCall}
           onSend={sendMessage}
           online={online}
+          uploading={uploadingFile}
           user={user}
         />
       ) : (
         <EmptyConversation error={messageError} onFindPeople={() => setSidebarMode("people")} />
       )}
       {showGroup && <GroupModal people={people} onClose={() => setShowGroup(false)} onCreate={createGroup} />}
+      {showAdmin && user.role === "admin" && (
+        <AdminPanel
+          currentUserId={user.id}
+          onClose={() => setShowAdmin(false)}
+          onUsersChanged={() => loadPeople().catch((error) => setMessageError(error.message))}
+        />
+      )}
       {call && (
         <CallOverlay
           call={call}
