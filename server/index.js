@@ -9,7 +9,6 @@ import jwt from "jsonwebtoken";
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { basename } from "node:path";
 import { Server } from "socket.io";
 
 const { Pool } = pg;
@@ -399,11 +398,7 @@ app.get("/api/chats/:chatId/messages", authenticate, asyncRoute(async (req, res)
        END AS attachment,
        json_build_object(
          'id', u.id, 'username', u.username, 'displayName', u.display_name
-       ) AS sender,
-       CASE WHEN a.message_id IS NULL THEN NULL ELSE json_build_object(
-         'fileName', a.file_name, 'contentType', a.content_type, 'size', a.byte_size,
-         'downloadUrl', '/api/files/' || m.id
-       ) END AS attachment
+       ) AS sender
      FROM (
        SELECT * FROM messages WHERE chat_id = $1
        ORDER BY created_at DESC LIMIT 100
@@ -436,57 +431,6 @@ app.post("/api/chats/:chatId/messages", authenticate, asyncRoute(async (req, res
 }));
 
 app.post(
-<<<<<<< HEAD
-  "/api/chats/:chatId/files",
-  authenticate,
-  express.raw({ type: "*/*", limit: "10mb" }),
-  asyncRoute(async (req, res) => {
-    if (!(await hasChatAccess(req.params.chatId, req.user.id))) {
-      return res.status(404).json({ error: "Conversation not found." });
-    }
-    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return res.status(400).json({ error: "Choose a non-empty file to share." });
-    }
-    let fileName;
-    try {
-      fileName = decodeURIComponent(String(req.get("X-File-Name") ?? ""));
-    } catch {
-      return res.status(400).json({ error: "The file name is invalid." });
-    }
-    fileName = basename(fileName.replace(/\\/g, "/"))
-      .replace(/[\u0000-\u001f\u007f]/g, "_")
-      .trim()
-      .slice(0, 255);
-    if (!fileName) return res.status(400).json({ error: "The file name is invalid." });
-    const requestedType = String(req.get("Content-Type") ?? "").split(";")[0].trim().toLowerCase();
-    const contentType = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(requestedType)
-      ? requestedType
-      : "application/octet-stream";
-
-    const message = await withTransaction(async (client) => {
-      const created = await client.query(
-        `INSERT INTO messages (chat_id, sender_id, text)
-         VALUES ($1, $2, $3)
-         RETURNING id, chat_id, text, created_at`,
-        [req.params.chatId, req.user.id, `Shared a file: ${fileName}`],
-      );
-      await client.query(
-        `INSERT INTO message_attachments (message_id, file_name, content_type, byte_size, data)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [created.rows[0].id, fileName, contentType, req.body.length, req.body],
-      );
-      return {
-        ...created.rows[0],
-        sender: publicUser(req.user),
-        attachment: {
-          fileName,
-          contentType,
-          size: req.body.length,
-          downloadUrl: `/api/files/${created.rows[0].id}`,
-        },
-      };
-    });
-=======
   "/api/chats/:chatId/attachments",
   authenticate,
   asyncRoute(async (req, res, next) => {
@@ -536,37 +480,11 @@ app.post(
         sender: publicUser(req.user),
       };
     });
-
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
     io.to(req.params.chatId).emit("message:new", message);
     res.status(201).json({ message });
   }),
 );
 
-<<<<<<< HEAD
-app.get("/api/files/:messageId", authenticate, asyncRoute(async (req, res) => {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.params.messageId)) {
-    return res.status(404).json({ error: "File not found." });
-  }
-  const result = await pool.query(
-    `SELECT a.file_name, a.data, a.byte_size
-     FROM message_attachments a
-     JOIN messages m ON m.id = a.message_id
-     JOIN chat_members cm ON cm.chat_id = m.chat_id
-     WHERE a.message_id = $1 AND cm.user_id = $2`,
-    [req.params.messageId, req.user.id],
-  );
-  if (!result.rowCount) return res.status(404).json({ error: "File not found." });
-  const file = result.rows[0];
-  res.attachment(file.file_name);
-  res.type("application/octet-stream");
-  res.set({
-    "Content-Length": String(file.byte_size),
-    "Cache-Control": "private, no-store",
-    "X-Content-Type-Options": "nosniff",
-  });
-  res.send(file.data);
-=======
 app.get("/api/chats/:chatId/messages/:messageId/file", authenticate, asyncRoute(async (req, res) => {
   if (!(await hasChatAccess(req.params.chatId, req.user.id))) {
     return res.status(404).json({ error: "Conversation not found." });
@@ -584,7 +502,6 @@ app.get("/api/chats/:chatId/messages/:messageId/file", authenticate, asyncRoute(
   res.type("application/octet-stream");
   res.set("X-Content-Type-Options", "nosniff");
   res.send(result.rows[0].data);
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
 }));
 
 app.use((req, res) => {
@@ -597,7 +514,7 @@ app.use((error, _req, res, _next) => {
   }
   console.error(error);
   if (error.type === "entity.too.large") {
-    return res.status(413).json({ error: "Files must be 10 MB or smaller." });
+    return res.status(413).json({ error: "Files must be 50 MB or smaller." });
   }
   res.status(500).json({ error: "Something went wrong. Please try again." });
 });
@@ -911,19 +828,11 @@ async function start() {
       text varchar(4000) NOT NULL CHECK (length(trim(text)) > 0),
       created_at timestamptz NOT NULL DEFAULT now()
     );
-<<<<<<< HEAD
-    CREATE TABLE IF NOT EXISTS message_attachments (
-      message_id uuid PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-      file_name varchar(255) NOT NULL,
-      content_type varchar(128) NOT NULL,
-      byte_size integer NOT NULL CHECK (byte_size > 0),
-=======
     ALTER TABLE messages ALTER COLUMN text DROP NOT NULL;
     CREATE TABLE IF NOT EXISTS message_attachments (
       message_id uuid PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
       file_name varchar(255) NOT NULL,
       file_size integer NOT NULL CHECK (file_size > 0 AND file_size <= 52428800),
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
       data bytea NOT NULL
     );
     CREATE INDEX IF NOT EXISTS messages_chat_created_idx

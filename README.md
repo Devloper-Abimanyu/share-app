@@ -44,13 +44,8 @@ Set `NODE_ENV=production`, `DATABASE_URL`, `JWT_SECRET`, `ADMIN_USERNAME`, `ADMI
 
 Cloudflare hosts the static frontend; the Node.js API and PostgreSQL database must run separately. This repository includes a Render Blueprint in `render.yaml` for the API and database.
 
-<<<<<<< HEAD
-1. In Render, create or sync the Blueprint from this GitHub repository and deploy it. The Blueprint generates a `JWT_SECRET` and first-admin password, connects the API to PostgreSQL, and allows the Cloudflare site origin. The admin username is `orbitadmin`; retrieve the generated `ADMIN_PASSWORD` from the Render service environment settings. The free PostgreSQL plan is for testing and may have usage or expiration limits; check Render's current plan details before storing important data.
-2. The frontend defaults to `https://orbit-chat-api.onrender.com` in production. If Render assigned a different URL, set the Cloudflare Workers & Pages build environment variable `VITE_API_URL` to that public API URL for production and preview as needed, then trigger a fresh deployment so Vite includes it in the frontend build.
-=======
 1. In Render, create a new Blueprint from this GitHub repository and deploy it. The Blueprint generates a `JWT_SECRET`, connects the API to PostgreSQL, and allows the Cloudflare site origin. The free PostgreSQL plan is for testing and may have usage or expiration limits; check Render's current plan details before storing important data.
 2. The production frontend defaults to `https://orbit-chat-api.onrender.com`, the API URL for this Render Blueprint. If Render assigns a different URL or you use another API host, set the Cloudflare Workers & Pages build variable `VITE_API_URL` to that public API URL for production (and preview if needed), then trigger a fresh deployment.
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
 3. If your Cloudflare site uses a different domain, update Render's `CLIENT_ORIGIN` to that exact origin and redeploy the API. The Blueprint sets `COOKIE_SAME_SITE=none` for cross-site session cookies; both sites must use HTTPS.
 4. Open `https://<your-api-host>/api/health`. It should return JSON such as `{"status":"ok"}`. Then reload the Cloudflare site and try registering an account.
 
@@ -62,8 +57,4 @@ Start a voice or video call from a conversation header. Group calls support up t
 
 Calls use peer-to-peer WebRTC with a public STUN server. Some networks require a TURN relay to connect; production deployments should configure a trusted TURN service and review its access, privacy, and cost policies. The development setup does not include TURN.
 
-<<<<<<< HEAD
-Messages and shared files (up to 10 MB each) are stored in PostgreSQL and delivered to conversation members. Admins can create accounts, change usernames, and reset passwords; password resets revoke existing sessions. This MVP does not provide end-to-end encryption, push notifications, or message editing/deletion. Do not use it for sensitive conversations without a security review and a production deployment plan.
-=======
 Messages and file attachments are stored in PostgreSQL and delivered live to connected members. Attachments accept any file type, are downloaded rather than rendered inline, and are limited to 50 MB each; storing files in PostgreSQL can consume database capacity quickly. This MVP does not provide end-to-end encryption, push notifications, or message editing/deletion. Do not use it for sensitive conversations without a security review and a production deployment plan.
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c

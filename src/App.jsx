@@ -7,11 +7,7 @@ import {
   CheckCheck,
   CircleHelp,
   Download,
-<<<<<<< HEAD
-  FileText,
   KeyRound,
-=======
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
   MessageCircle,
   MessageSquarePlus,
   MoreHorizontal,
@@ -30,16 +26,10 @@ import {
 import CallOverlay from "./CallOverlay.jsx";
 
 const apiBaseUrl = (
-<<<<<<< HEAD
-  import.meta.env.VITE_API_URL
-  || (import.meta.env.PROD ? "https://orbit-chat-api.onrender.com" : "")
-).replace(/\/+$/, "");
-=======
   import.meta.env.VITE_API_URL ||
   (import.meta.env.PROD ? "https://orbit-chat-api.onrender.com" : "")
 ).replace(/\/+$/, "");
 const maxAttachmentBytes = 50 * 1024 * 1024;
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
 
 async function api(path, options = {}) {
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -527,9 +517,6 @@ function GroupModal({ people, onClose, onCreate }) {
   );
 }
 
-<<<<<<< HEAD
-function ChatView({ chat, user, online, messages, onSend, onUploadFile, uploading, onBack, onStartCall, loading, error }) {
-=======
 function ChatView({
   chat,
   user,
@@ -543,7 +530,6 @@ function ChatView({
   loading,
   error,
 }) {
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
@@ -646,17 +632,6 @@ function ChatView({
                 {!mine && chat.kind === "group" && !grouped && <span className="message-author">{message.sender.displayName}</span>}
                 <div className="message-bubble">
                   {message.attachment ? (
-<<<<<<< HEAD
-                    <a className="message-file" download href={`${apiBaseUrl}${message.attachment.downloadUrl}`}>
-                      <FileText size={17} />
-                      <span>
-                        <strong>{message.attachment.fileName}</strong>
-                        <small>{formatFileSize(message.attachment.size)}</small>
-                      </span>
-                      <Download size={15} />
-                    </a>
-                  ) : <p>{message.text}</p>}
-=======
                     <button
                       className="message-attachment"
                       onClick={() => onDownloadFile(message)}
@@ -671,7 +646,6 @@ function ChatView({
                       <Download size={15} />
                     </button>
                   ) : message.text ? <p>{message.text}</p> : null}
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
                   <span className="message-time">
                     {formatTime(message.created_at)}
                     {mine && <CheckCheck size={14} />}
@@ -703,27 +677,6 @@ function ChatView({
             <Paperclip size={18} />
           </button>
           <button className="composer-tool" type="button" aria-label="Emoji picker (coming soon)" title="Emoji picker coming soon"><Smile size={19} /></button>
-          <input
-            accept="*/*"
-            hidden
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              event.target.value = "";
-              if (file) onUploadFile(file);
-            }}
-            ref={fileInputRef}
-            type="file"
-          />
-          <button
-            className="composer-tool"
-            disabled={uploading}
-            onClick={() => fileInputRef.current?.click()}
-            type="button"
-            aria-label={uploading ? "Uploading file" : "Share a file"}
-            title={uploading ? "Uploading file…" : "Share a file (10 MB max)"}
-          >
-            <Paperclip size={18} />
-          </button>
           <textarea
             aria-label="Write a message"
             maxLength={4000}
@@ -902,23 +855,6 @@ function ChatApp({ user, onLogout, appError }) {
     }
   }
 
-<<<<<<< HEAD
-  async function uploadFile(file) {
-    setMessageError("");
-    if (file.size > 10 * 1024 * 1024) {
-      setMessageError("Files must be 10 MB or smaller.");
-      return;
-    }
-    setUploadingFile(true);
-    try {
-      const data = await api(`/api/chats/${selectedChatId}/files`, {
-        method: "POST",
-        headers: {
-          "Content-Type": file.type || "application/octet-stream",
-          "X-File-Name": encodeURIComponent(file.name),
-        },
-        body: file,
-=======
   async function sendFile(file) {
     setMessageError("");
     try {
@@ -929,18 +865,11 @@ function ChatApp({ user, onLogout, appError }) {
           "Content-Type": "application/octet-stream",
           "X-File-Name": encodeURIComponent(file.name),
         },
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
       });
       setMessages((current) => current.some((message) => message.id === data.message.id)
         ? current
         : [...current, data.message]);
       loadChats().catch((error) => setMessageError(error.message));
-<<<<<<< HEAD
-    } catch (error) {
-      setMessageError(error.message);
-    } finally {
-      setUploadingFile(false);
-=======
       return true;
     } catch (error) {
       setMessageError(error.message);
@@ -971,7 +900,6 @@ function ChatApp({ user, onLogout, appError }) {
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     } catch (error) {
       setMessageError(error.message);
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
     }
   }
 
@@ -1018,7 +946,6 @@ function ChatApp({ user, onLogout, appError }) {
           key={selectedChatId}
           loading={messageLoading}
           messages={messages}
-          onUploadFile={uploadFile}
           onBack={() => setSelectedChatId(null)}
           onDownloadFile={downloadFile}
           onSendFile={sendFile}

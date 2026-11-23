@@ -480,19 +480,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .message-mine .message-bubble { border-color: #e2dafc; border-radius: 14px 14px 4px 14px; background: #f0ecff; }
 .message-bubble p { margin: 0; color: #535267; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
 .message-mine .message-bubble p { color: #484064; }
-<<<<<<< HEAD
-.message-file { display: flex; min-width: 180px; align-items: center; gap: 9px; color: #7160b6; text-decoration: none; }
-.message-file > span { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
-.message-file strong { overflow: hidden; color: #51496f; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.message-file small { color: #9893aa; font-size: 9px; }
-.message-file:hover strong { text-decoration: underline; }
-=======
 .message-attachment { display: flex; max-width: 290px; min-width: 0; align-items: center; gap: 9px; padding: 2px; border: 0; background: transparent; color: var(--purple); text-align: left; cursor: pointer; }
 .message-attachment > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .message-attachment strong { color: #484064; font-size: 11px; overflow-wrap: anywhere; }
 .message-attachment small { color: #88859a; font-size: 9px; }
 .message-attachment:hover strong { text-decoration: underline; }
->>>>>>> 6dd4ce24b1bdf1f028472ec3aeeda99a75fe6a7c
 .message-time { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; color: #aaa9b7; font-size: 8px; white-space: nowrap; }
 .message-mine .message-time svg { color: #8b70e5; }
 .composer { padding: 13px clamp(18px, 6vw, 95px) 16px; }
