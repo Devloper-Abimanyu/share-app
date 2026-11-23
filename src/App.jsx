@@ -750,7 +750,7 @@ function EmptyConversation({ onFindPeople, error }) {
   );
 }
 
-function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, onJoin, onOpenMeeting }) {
+function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, onJoin, onOpenMeeting, onBack }) {
   const [title, setTitle] = useState("");
   const [startsAt, setStartsAt] = useState(() => dateTimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)));
   const [inviteeIds, setInviteeIds] = useState([]);
@@ -851,6 +851,9 @@ function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, 
   return (
     <section className="meetings-page">
       <header className="meetings-header">
+        <button className="meetings-back-button" onClick={onBack} type="button">
+          <ArrowLeft size={16} /> Back to chats
+        </button>
         <div>
           <span className="eyebrow"><Video size={13} /> ORBIT MEETINGS</span>
           <h1>Make room for a good conversation.</h1>
@@ -1255,6 +1258,7 @@ function ChatApp({ user, onLogout, appError }) {
           onCreate={createMeeting}
           onJoin={joinMeeting}
           onOpenMeeting={openMeeting}
+          onBack={() => setSidebarMode("chats")}
           people={people}
           user={user}
         />
