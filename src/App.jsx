@@ -3,11 +3,15 @@ import { io } from "socket.io-client";
 import {
   ArrowLeft,
   ArrowUp,
+  CalendarDays,
   Check,
   CheckCheck,
   CircleHelp,
+  Clock3,
+  Copy,
   Download,
   KeyRound,
+  Link2,
   MessageCircle,
   MessageSquarePlus,
   MoreHorizontal,
@@ -324,6 +328,17 @@ function formatTime(dateString) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function dateTimeLocalValue(date) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 16);
+}
+
+function meetingLink(meetingId) {
+  const url = new URL("/", window.location.origin);
+  url.searchParams.set("meeting", meetingId);
+  return url.toString();
+}
+
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -380,17 +395,22 @@ function Sidebar({
         <button className={mode === "people" ? "active" : ""} onClick={() => onModeChange("people")} role="tab">
           <Users size={16} /> People
         </button>
+        <button className={mode === "meetings" ? "active" : ""} onClick={() => onModeChange("meetings")} role="tab">
+          <Video size={16} /> Meetings
+        </button>
       </div>
-      <div className="search-box">
-        <Search size={16} />
-        <input
-          aria-label={mode === "chats" ? "Search conversations" : "Search people"}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder={mode === "chats" ? "Find a conversation" : "Find your people"}
-          value={search}
-        />
-        {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={14} /></button>}
-      </div>
+      {mode !== "meetings" && (
+        <div className="search-box">
+          <Search size={16} />
+          <input
+            aria-label={mode === "chats" ? "Search conversations" : "Search people"}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={mode === "chats" ? "Find a conversation" : "Find your people"}
+            value={search}
+          />
+          {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={14} /></button>}
+        </div>
+      )}
       {mode === "chats" ? (
         <div className="sidebar-list">
           <div className="list-heading">
@@ -427,7 +447,7 @@ function Sidebar({
             </div>
           )}
         </div>
-      ) : (
+      ) : mode === "people" ? (
         <div className="sidebar-list">
           <div className="list-heading"><span>YOUR PEOPLE</span></div>
           {visiblePeople.length ? visiblePeople.map((person) => (
@@ -446,6 +466,15 @@ function Sidebar({
               <p>{search ? "Try another search." : "When others join Orbit, you’ll find them here."}</p>
             </div>
           )}
+        </div>
+      ) : (
+        <div className="sidebar-list">
+          <div className="list-heading"><span>MEETINGS</span></div>
+          <div className="list-empty">
+            <span className="empty-icon"><Video size={19} /></span>
+            <strong>Meet your people live</strong>
+            <p>Start an instant meeting, schedule one, or join with a meeting link.</p>
+          </div>
         </div>
       )}
       <footer className="sidebar-footer">
@@ -721,9 +750,232 @@ function EmptyConversation({ onFindPeople, error }) {
   );
 }
 
+function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, onJoin, onOpenMeeting }) {
+  const [title, setTitle] = useState("");
+  const [startsAt, setStartsAt] = useState(() => dateTimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)));
+  const [inviteeIds, setInviteeIds] = useState([]);
+  const [meetingLinkInput, setMeetingLinkInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [copiedMeetingId, setCopiedMeetingId] = useState("");
+  const availablePeople = people.filter((person) => person.id !== user.id);
+  const meetingRows = [...meetings];
+  if (linkedMeeting && !meetingRows.some((meeting) => meeting.id === linkedMeeting.id)) {
+    meetingRows.unshift(linkedMeeting);
+  }
+  meetingRows.sort((left, right) => {
+    const leftTime = new Date(left.starts_at).getTime();
+    const rightTime = new Date(right.starts_at).getTime();
+    const leftPast = left.kind === "scheduled" && leftTime < Date.now();
+    const rightPast = right.kind === "scheduled" && rightTime < Date.now();
+    if (leftPast !== rightPast) return leftPast ? 1 : -1;
+    return leftPast ? rightTime - leftTime : leftTime - rightTime;
+  });
+
+  function toggleInvitee(userId) {
+    if (inviteeIds.includes(userId)) {
+      setInviteeIds((current) => current.filter((id) => id !== userId));
+      setLocalError("");
+      return;
+    }
+    if (inviteeIds.length >= 5) {
+      setLocalError("A meeting can have up to 6 people, including you.");
+      return;
+    }
+    setInviteeIds((current) => [...current, userId]);
+    setLocalError("");
+  }
+
+  async function createMeeting(instant) {
+    setLocalError("");
+    if (!title.trim()) {
+      setLocalError("Add a name for your meeting.");
+      return;
+    }
+    if (!instant && (!startsAt || new Date(startsAt) <= new Date())) {
+      setLocalError("Choose a future meeting date and time.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const meeting = await onCreate({
+        title: title.trim(),
+        startsAt: instant ? null : new Date(startsAt).toISOString(),
+        inviteeIds,
+        instant,
+      });
+      setTitle("");
+      if (instant) onJoin(meeting, "video");
+    } catch (createError) {
+      setLocalError(createError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openMeetingLink(event) {
+    event.preventDefault();
+    setLocalError("");
+    const value = meetingLinkInput.trim();
+    let meetingId = value;
+    try {
+      const url = new URL(value, window.location.origin);
+      meetingId = url.searchParams.get("meeting") ?? value;
+    } catch (linkError) {
+      setLocalError(linkError.message);
+      return;
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(meetingId)) {
+      setLocalError("Paste a valid Orbit meeting link or meeting ID.");
+      return;
+    }
+    try {
+      await onOpenMeeting(meetingId);
+      setMeetingLinkInput("");
+    } catch (linkError) {
+      setLocalError(linkError.message);
+    }
+  }
+
+  async function copyMeetingLink(meetingId) {
+    setLocalError("");
+    try {
+      await navigator.clipboard.writeText(meetingLink(meetingId));
+      setCopiedMeetingId(meetingId);
+      window.setTimeout(() => setCopiedMeetingId((current) => current === meetingId ? "" : current), 2000);
+    } catch (copyError) {
+      setLocalError(`Could not copy the meeting link: ${copyError.message}`);
+    }
+  }
+
+  return (
+    <section className="meetings-page">
+      <header className="meetings-header">
+        <div>
+          <span className="eyebrow"><Video size={13} /> ORBIT MEETINGS</span>
+          <h1>Make room for a good conversation.</h1>
+          <p>Start a video meeting now, schedule one for later, or join with a link.</p>
+        </div>
+      </header>
+
+      <div className="meetings-content">
+        <section className="meeting-panel">
+          <div className="meeting-panel-heading">
+            <span className="meeting-panel-icon"><CalendarDays size={20} /></span>
+            <div><h2>Plan a meeting</h2><p>Invite up to five people from Orbit.</p></div>
+          </div>
+          <label className="meeting-field">
+            <span>MEETING NAME</span>
+            <input maxLength={80} onChange={(event) => setTitle(event.target.value)} placeholder="Weekly team check-in" value={title} />
+          </label>
+          <label className="meeting-field">
+            <span>DATE AND TIME</span>
+            <input
+              min={dateTimeLocalValue(new Date())}
+              onChange={(event) => setStartsAt(event.target.value)}
+              type="datetime-local"
+              value={startsAt}
+            />
+          </label>
+          <div className="meeting-invitees">
+            <div className="meeting-invitees-heading"><span>INVITE PEOPLE</span><span>{inviteeIds.length} / 5</span></div>
+            <div className="meeting-invitee-list">
+              {availablePeople.map((person) => (
+                <label className="meeting-invitee" key={person.id}>
+                  <input
+                    checked={inviteeIds.includes(person.id)}
+                    disabled={!inviteeIds.includes(person.id) && inviteeIds.length >= 5}
+                    onChange={() => toggleInvitee(person.id)}
+                    type="checkbox"
+                  />
+                  <span>{person.displayName}</span>
+                  <small>@{person.username}</small>
+                </label>
+              ))}
+              {!availablePeople.length && <p className="meeting-empty-people">No other accounts are available to invite yet.</p>}
+            </div>
+          </div>
+          {(localError || error) && <p className="meeting-error" role="alert">{localError || error}</p>}
+          <div className="meeting-create-actions">
+            <button className="primary-button meeting-submit" disabled={busy} onClick={() => createMeeting(false)} type="button">
+              <CalendarDays size={16} /> {busy ? "Saving…" : "Schedule"}
+            </button>
+            <button className="secondary-button meeting-start-now" disabled={busy} onClick={() => createMeeting(true)} type="button">
+              <Video size={16} /> Start now
+            </button>
+          </div>
+        </section>
+
+        <div className="meeting-main-column">
+          <form className="meeting-join-panel" onSubmit={openMeetingLink}>
+            <div><Link2 size={18} /><strong>Join with a link</strong></div>
+            <input
+              aria-label="Meeting link or ID"
+              onChange={(event) => setMeetingLinkInput(event.target.value)}
+              placeholder="Paste an Orbit meeting link or ID"
+              value={meetingLinkInput}
+            />
+            <button className="secondary-button" disabled={!meetingLinkInput.trim()} type="submit">Find meeting</button>
+          </form>
+
+          {linkedMeeting && (
+            <section className="meeting-link-preview">
+              <div><span className="eyebrow">MEETING LINK OPENED</span><h2>{linkedMeeting.title}</h2></div>
+              <button className="primary-button meeting-join-button" onClick={() => onJoin(linkedMeeting, "video")} type="button">
+                <Video size={16} /> Join meeting
+              </button>
+            </section>
+          )}
+
+          <section className="meeting-list-section">
+            <div className="meeting-list-heading"><div><span className="eyebrow">YOUR CALENDAR</span><h2>Meetings</h2></div><span>{meetingRows.length}</span></div>
+            {meetingRows.length ? (
+              <div className="meeting-cards">
+                {meetingRows.map((meeting) => {
+                  const startDate = new Date(meeting.starts_at);
+                  const isPast = meeting.kind === "scheduled" && startDate < new Date();
+                  return (
+                    <article className="meeting-card" key={meeting.id}>
+                      <div className="meeting-card-date"><CalendarDays size={17} /><span>{startDate.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}</span></div>
+                      <h3>{meeting.title}</h3>
+                      <p className="meeting-card-time"><Clock3 size={14} /> {meeting.kind === "instant" ? "Instant meeting" : `${startDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ${isPast ? "Past meeting" : "Ready to join"}`}</p>
+                      <p className="meeting-card-host">{meeting.host?.id === user.id ? "You’re hosting" : `Hosted by ${meeting.host?.displayName ?? "an Orbit member"}`}</p>
+                      {meeting.invitees?.length > 0 && (
+                        <p className="meeting-card-invitees">With {meeting.invitees.map((invitee) => invitee.displayName).join(", ")}</p>
+                      )}
+                      <div className="meeting-card-actions">
+                        <button className="primary-button meeting-join-button" onClick={() => onJoin(meeting, "video")} type="button">
+                          <Video size={15} /> Join
+                        </button>
+                        <button className="meeting-copy-button" onClick={() => copyMeetingLink(meeting.id)} type="button">
+                          {copiedMeetingId === meeting.id ? <Check size={15} /> : <Copy size={15} />}
+                          {copiedMeetingId === meeting.id ? "Copied" : "Copy link"}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="meeting-empty-state">
+                <span className="empty-icon"><CalendarDays size={20} /></span>
+                <strong>Your next good conversation starts here.</strong>
+                <p>Schedule a meeting or start one right away, then share its private link.</p>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ChatApp({ user, onLogout, appError }) {
   const [chats, setChats] = useState([]);
   const [people, setPeople] = useState([]);
+  const [meetings, setMeetings] = useState([]);
+  const [linkedMeeting, setLinkedMeeting] = useState(null);
+  const [meetingError, setMeetingError] = useState("");
   const [selectedChatId, setSelectedChatId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [online, setOnline] = useState(() => new Set());
@@ -732,7 +984,8 @@ function ChatApp({ user, onLogout, appError }) {
   const [showGroup, setShowGroup] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
-  const [sidebarMode, setSidebarMode] = useState("chats");
+  const [sidebarMode, setSidebarMode] = useState(() =>
+    new URLSearchParams(window.location.search).has("meeting") ? "meetings" : "chats");
   const [socket, setSocket] = useState(null);
   const [call, setCall] = useState(null);
   const selectedChatIdRef = useRef(selectedChatId);
@@ -751,9 +1004,27 @@ function ChatApp({ user, onLogout, appError }) {
     setPeople(data.users);
   }, []);
 
+  const loadMeetings = useCallback(async () => {
+    const data = await api("/api/meetings");
+    setMeetings(data.meetings);
+  }, []);
+
   useEffect(() => {
-    Promise.all([loadChats(), loadPeople()]).catch((error) => setMessageError(error.message));
-  }, [loadChats, loadPeople]);
+    loadChats().catch((error) => setMessageError(error.message));
+    loadPeople().catch((error) => setMessageError(error.message));
+    loadMeetings().catch((error) => setMeetingError(error.message));
+  }, [loadChats, loadMeetings, loadPeople]);
+
+  useEffect(() => {
+    const meetingId = new URLSearchParams(window.location.search).get("meeting");
+    if (!meetingId) return;
+    api(`/api/meetings/${encodeURIComponent(meetingId)}`)
+      .then((data) => {
+        setLinkedMeeting(data.meeting);
+        setSidebarMode("meetings");
+      })
+      .catch((error) => setMeetingError(error.message));
+  }, []);
 
   useEffect(() => {
     const socket = io(apiBaseUrl || undefined, { withCredentials: true });
@@ -835,6 +1106,40 @@ function ChatApp({ user, onLogout, appError }) {
     await loadChats();
     setShowGroup(false);
     setSelectedChatId(data.chatId);
+  }
+
+  async function createMeeting(details) {
+    setMeetingError("");
+    const data = await api("/api/meetings", {
+      method: "POST",
+      body: JSON.stringify(details),
+    });
+    setMeetings((current) => [data.meeting, ...current.filter((meeting) => meeting.id !== data.meeting.id)]);
+    return data.meeting;
+  }
+
+  async function openMeeting(meetingId) {
+    setMeetingError("");
+    const data = await api(`/api/meetings/${encodeURIComponent(meetingId)}`);
+    setLinkedMeeting(data.meeting);
+    setSidebarMode("meetings");
+    return data.meeting;
+  }
+
+  function joinMeeting(meeting, mode) {
+    if (!socket?.connected) {
+      setMeetingError("Connecting to the meeting service. Please try again in a moment.");
+      return;
+    }
+    setMeetingError("");
+    setCall({
+      requestId: crypto.randomUUID(),
+      meetingId: meeting.id,
+      meetingTitle: meeting.title,
+      mode,
+      status: "outgoing",
+      participants: [],
+    });
   }
 
   async function sendMessage(text) {
@@ -937,9 +1242,23 @@ function ChatApp({ user, onLogout, appError }) {
         selectedChatId={selectedChatId}
         user={user}
         mode={sidebarMode}
-        onModeChange={setSidebarMode}
+        onModeChange={(mode) => {
+          setSidebarMode(mode);
+          if (mode === "meetings") setSelectedChatId(null);
+        }}
       />
-      {selectedChat ? (
+      {sidebarMode === "meetings" ? (
+        <MeetingsView
+          error={meetingError}
+          linkedMeeting={linkedMeeting}
+          meetings={meetings}
+          onCreate={createMeeting}
+          onJoin={joinMeeting}
+          onOpenMeeting={openMeeting}
+          people={people}
+          user={user}
+        />
+      ) : selectedChat ? (
         <ChatView
           chat={selectedChat}
           error={messageError}

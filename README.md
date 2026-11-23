@@ -51,6 +51,12 @@ Cloudflare hosts the static frontend; the Node.js API and PostgreSQL database mu
 
 Do not set `VITE_API_URL` to the Cloudflare site URL: it must point to the Render API service. Keep database credentials and `JWT_SECRET` in Render environment settings, not in Cloudflare frontend variables.
 
+## Meetings
+
+Open **Meetings** in the sidebar to start an instant video meeting or schedule one for later. You can invite up to five Orbit accounts; meetings support up to six participants total. Copy a meeting link to share it, or open **Meetings** and paste a link to join. Participants must sign in to Orbit before joining. Meeting links grant access to anyone who has the link, so share them privately.
+
+Scheduled meetings and invitations are stored in PostgreSQL. Live audio/video uses the same Socket.IO and WebRTC service as chat calls; it is not hosted by Cloudflare Pages.
+
 ## Calls and screen sharing
 
 Start a voice or video call from a conversation header. Group calls support up to six people. During a call, use **Share screen** to present a screen or window; the browser will ask you to choose what to share. Calls require camera and microphone permission, and screen sharing requires a secure browser context (localhost or HTTPS).

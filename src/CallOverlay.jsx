@@ -176,9 +176,12 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
         localStreamRef.current = pendingStream;
         setLocalStream(pendingStream);
         const response = await emitWithAck(socket, "call:start", {
-          chatId: call.chatId,
+          ...(call.meetingId ? { meetingId: call.meetingId } : { chatId: call.chatId }),
           mode: call.mode,
         });
+        const joined = response.joinExisting
+          ? await emitWithAck(socket, "call:join", { callId: response.callId })
+          : response;
         if (cancelled) {
           stopStream(pendingStream);
           socket.emit("call:leave", { callId: response.callId });
@@ -188,8 +191,9 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
           ? {
             ...current,
             ...response,
-            status: "ringing",
-            participants: response.participants,
+            status: response.joinExisting && joined.participants.length ? "active" : "ringing",
+            joined: Boolean(response.joinExisting),
+            participants: joined.participants,
           }
           : current);
       } catch (error) {
@@ -304,6 +308,18 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
   }, [call.callId, createOffer, createPeerConnection, onChange, releaseMedia, sendSignal, socket, user.id]);
 
   useEffect(() => {
+    if (!call.joined || !call.callId) return;
+    for (const peer of callRef.current.participants ?? []) {
+      if (peer.id === user.id) continue;
+      if (user.id.localeCompare(peer.id) < 0) {
+        createOffer(peer).catch((error) => setCallError(error.message));
+      } else {
+        createPeerConnection(peer);
+      }
+    }
+  }, [call.callId, call.joined, createOffer, createPeerConnection, user.id]);
+
+  useEffect(() => {
     if (call.status !== "active") return undefined;
     const timer = setInterval(() => setElapsedSeconds((seconds) => seconds + 1), 1000);
     return () => clearInterval(timer);
@@ -384,9 +400,9 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
     onClose();
   }
 
-  const title = call.chatName || call.caller?.displayName || call.chatTitle || "Orbit call";
+  const title = call.meetingTitle || call.chatName || call.caller?.displayName || call.chatTitle || "Orbit call";
   const callStatus = call.status === "incoming"
-    ? `${call.mode === "video" ? "Video" : "Voice"} call from ${call.caller?.displayName ?? "your friend"}`
+    ? `${call.mode === "video" ? "Video" : "Voice"} ${call.meetingId ? "meeting" : "call"} from ${call.caller?.displayName ?? "your friend"}`
     : call.status === "outgoing"
       ? "Getting your camera and microphone ready…"
       : call.status === "ringing"

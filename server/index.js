@@ -14,6 +14,7 @@ import { Server } from "socket.io";
 const { Pool } = pg;
 const port = Number(process.env.PORT ?? 3001);
 const maxAttachmentBytes = 50 * 1024 * 1024;
+const maxCallParticipants = 6;
 const jwtSecret = process.env.JWT_SECRET;
 const cookieName = "orbit_session";
 const tokenLifetime = "7d";
@@ -279,6 +280,99 @@ app.get("/api/users", authenticate, asyncRoute(async (req, res) => {
   res.json({ users: result.rows.map(publicUser) });
 }));
 
+const meetingSelect = `SELECT m.id, m.title, m.kind, m.starts_at, m.created_at,
+  json_build_object(
+    'id', host.id, 'username', host.username,
+    'displayName', host.display_name, 'role', host.role
+  ) AS host,
+  COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', invitee.id, 'username', invitee.username,
+      'displayName', invitee.display_name, 'role', invitee.role
+    ) ORDER BY invitee.display_name)
+    FROM meeting_invitees mi
+    JOIN users invitee ON invitee.id = mi.user_id
+    WHERE mi.meeting_id = m.id
+  ), '[]'::json) AS invitees
+  FROM meetings m
+  JOIN users host ON host.id = m.host_id`;
+
+async function getMeeting(meetingId, database = pool) {
+  const result = await database.query(`${meetingSelect} WHERE m.id = $1`, [meetingId]);
+  return result.rows[0] ?? null;
+}
+
+app.get("/api/meetings", authenticate, asyncRoute(async (req, res) => {
+  const result = await pool.query(
+    `${meetingSelect}
+     WHERE m.host_id = $1 OR EXISTS (
+       SELECT 1 FROM meeting_invitees mi
+       WHERE mi.meeting_id = m.id AND mi.user_id = $1
+     )
+     ORDER BY m.starts_at`,
+    [req.user.id],
+  );
+  res.json({ meetings: result.rows });
+}));
+
+app.get("/api/meetings/:meetingId", authenticate, asyncRoute(async (req, res) => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.params.meetingId)) {
+    return res.status(404).json({ error: "Meeting not found." });
+  }
+  const meeting = await getMeeting(req.params.meetingId);
+  if (!meeting) return res.status(404).json({ error: "Meeting not found." });
+  res.json({ meeting });
+}));
+
+app.post("/api/meetings", authenticate, asyncRoute(async (req, res) => {
+  const title = String(req.body.title ?? "").trim();
+  const instant = req.body.instant === true;
+  const inviteeIds = req.body.inviteeIds;
+  if (title.length < 1 || title.length > 80) {
+    return res.status(400).json({ error: "Meeting name must be between 1 and 80 characters." });
+  }
+  if (!Array.isArray(inviteeIds) || inviteeIds.length > maxCallParticipants - 1 ||
+      inviteeIds.some((id) => typeof id !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) ||
+      new Set(inviteeIds).size !== inviteeIds.length || inviteeIds.includes(req.user.id)) {
+    return res.status(400).json({ error: `Choose up to ${maxCallParticipants - 1} valid invitees.` });
+  }
+  let startsAt;
+  if (instant) {
+    startsAt = new Date();
+  } else {
+    startsAt = new Date(req.body.startsAt);
+    if (typeof req.body.startsAt !== "string" || Number.isNaN(startsAt.getTime()) || startsAt <= new Date()) {
+      return res.status(400).json({ error: "Choose a future meeting date and time." });
+    }
+  }
+
+  const invitees = await pool.query(
+    "SELECT id FROM users WHERE id = ANY($1::uuid[])",
+    [inviteeIds],
+  );
+  if (invitees.rowCount !== inviteeIds.length) {
+    return res.status(400).json({ error: "One or more selected invitees are unavailable." });
+  }
+  const meetingId = await withTransaction(async (client) => {
+    const created = await client.query(
+      `INSERT INTO meetings (host_id, title, starts_at, kind)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id`,
+      [req.user.id, title, startsAt, instant ? "instant" : "scheduled"],
+    );
+    if (inviteeIds.length) {
+      await client.query(
+        `INSERT INTO meeting_invitees (meeting_id, user_id)
+         SELECT $1, unnest($2::uuid[])`,
+        [created.rows[0].id, inviteeIds],
+      );
+    }
+    return created.rows[0].id;
+  });
+  res.status(201).json({ meeting: await getMeeting(meetingId) });
+}));
+
 app.get("/api/chats", authenticate, asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT c.id, c.name, c.kind, c.created_at,
@@ -521,7 +615,6 @@ app.use((error, _req, res, _next) => {
 
 const onlineCounts = new Map();
 const activeCalls = new Map();
-const maxCallParticipants = 6;
 
 function emitCallError(socket, acknowledge, message) {
   const response = { error: message };
@@ -602,41 +695,100 @@ io.on("connection", async (socket) => {
     }
   });
 
-  socket.on("call:start", async ({ chatId, mode } = {}, acknowledge) => {
+  socket.on("call:start", async ({ chatId, meetingId, mode } = {}, acknowledge) => {
     try {
-      if (typeof chatId !== "string" ||
-          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(chatId) ||
-          !["audio", "video"].includes(mode)) {
-        return emitCallError(socket, acknowledge, "Choose a valid conversation and call type.");
+      const validId = (value) => typeof value === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+      if (!["audio", "video"].includes(mode) ||
+          (Boolean(chatId) === Boolean(meetingId)) ||
+          (chatId && !validId(chatId)) || (meetingId && !validId(meetingId))) {
+        return emitCallError(socket, acknowledge, "Choose a valid conversation or meeting and call type.");
       }
 
-      const membership = await pool.query(
-        `SELECT c.kind, c.name, u.id, u.username, u.display_name
-         FROM chats c
-         JOIN chat_members cm ON cm.chat_id = c.id
-         JOIN users u ON u.id = cm.user_id
-         WHERE c.id = $1
-         ORDER BY u.display_name`,
-        [chatId],
-      );
-      if (!membership.rowCount || !membership.rows.some((member) => member.id === user.id)) {
-        return emitCallError(socket, acknowledge, "You are not a member of this conversation.");
-      }
-      if (membership.rowCount > maxCallParticipants) {
-        return emitCallError(socket, acknowledge, `Calls currently support up to ${maxCallParticipants} people.`);
-      }
       if ([...activeCalls.values()].some((call) =>
-        call.participants.has(user.id) || call.invited.has(user.id))) {
+        (call.participants.has(user.id) || call.invited.has(user.id)) && call.meetingId !== meetingId)) {
         return emitCallError(socket, acknowledge, "You are already in another call.");
+      }
+
+      let chatName = null;
+      let invitedMembers;
+      if (meetingId) {
+        const meetingResult = await pool.query(
+          `SELECT m.title, m.host_id, u.id, u.username, u.display_name, u.role
+           FROM meetings m
+           JOIN users u ON u.id = m.host_id
+           WHERE m.id = $1`,
+          [meetingId],
+        );
+        if (!meetingResult.rowCount) return emitCallError(socket, acknowledge, "Meeting not found.");
+        const meeting = meetingResult.rows[0];
+        chatName = meeting.title;
+
+        const existingMeetingCall = [...activeCalls.values()].find((call) => call.meetingId === meetingId);
+        if (existingMeetingCall) {
+          if (existingMeetingCall.participants.has(user.id)) {
+            return emitCallError(socket, acknowledge, "You are already in this meeting.");
+          }
+          if (existingMeetingCall.participants.size >= maxCallParticipants) {
+            return emitCallError(socket, acknowledge, "This meeting is full.");
+          }
+          existingMeetingCall.invited.add(user.id);
+          if (typeof acknowledge === "function") {
+            acknowledge({
+              callId: existingMeetingCall.id,
+              meetingId,
+              chatName,
+              mode,
+              participants: [...existingMeetingCall.participants.values()],
+              joinExisting: true,
+            });
+          }
+          return;
+        }
+
+        const invitees = await pool.query(
+          `SELECT u.id, u.username, u.display_name, u.role
+           FROM meeting_invitees mi
+           JOIN users u ON u.id = mi.user_id
+           WHERE mi.meeting_id = $1
+           ORDER BY u.display_name`,
+          [meetingId],
+        );
+        const invitedIds = [...new Set([meeting.host_id, ...invitees.rows.map((member) => member.id)])]
+          .filter((id) => id !== user.id)
+          .slice(0, maxCallParticipants - 1);
+        const invitedUsers = new Map([
+          [meeting.host_id, meeting],
+          ...invitees.rows.map((member) => [member.id, member]),
+        ]);
+        invitedMembers = invitedIds.map((id) => invitedUsers.get(id)).filter(Boolean);
+      } else {
+        const membership = await pool.query(
+          `SELECT c.kind, c.name, u.id, u.username, u.display_name, u.role
+           FROM chats c
+           JOIN chat_members cm ON cm.chat_id = c.id
+           JOIN users u ON u.id = cm.user_id
+           WHERE c.id = $1
+           ORDER BY u.display_name`,
+          [chatId],
+        );
+        if (!membership.rowCount || !membership.rows.some((member) => member.id === user.id)) {
+          return emitCallError(socket, acknowledge, "You are not a member of this conversation.");
+        }
+        if (membership.rowCount > maxCallParticipants) {
+          return emitCallError(socket, acknowledge, `Calls currently support up to ${maxCallParticipants} people.`);
+        }
+        chatName = membership.rows[0].kind === "group" ? membership.rows[0].name : null;
+        invitedMembers = membership.rows.filter((member) => member.id !== user.id);
       }
 
       const callId = randomUUID();
       const participants = new Map([[user.id, publicUser(user)]]);
-      const invitedMembers = membership.rows.filter((member) => member.id !== user.id);
       const call = {
         id: callId,
-        chatId,
-        chatName: membership.rows[0].kind === "group" ? membership.rows[0].name : null,
+        chatId: chatId ?? null,
+        meetingId: meetingId ?? null,
+        chatName,
         mode,
         callerId: user.id,
         participants,
@@ -644,14 +796,16 @@ io.on("connection", async (socket) => {
         timeout: null,
       };
       activeCalls.set(callId, call);
-      call.timeout = setTimeout(() => finishCall(call, "no-answer"), 45_000);
+      if (!meetingId) call.timeout = setTimeout(() => finishCall(call, "no-answer"), 45_000);
 
       const caller = publicUser(user);
       for (const member of invitedMembers) {
         io.to(`user:${member.id}`).emit("call:incoming", {
           callId,
           chatId,
+          meetingId: meetingId ?? null,
           chatName: call.chatName,
+          meetingTitle: meetingId ? call.chatName : null,
           mode,
           caller,
         });
@@ -659,8 +813,10 @@ io.on("connection", async (socket) => {
       if (typeof acknowledge === "function") {
         acknowledge({
           callId,
-          chatId,
+          chatId: chatId ?? null,
+          meetingId: meetingId ?? null,
           chatName: call.chatName,
+          meetingTitle: meetingId ? call.chatName : null,
           mode,
           participants: invitedMembers.map(publicUser),
         });
@@ -685,6 +841,9 @@ io.on("connection", async (socket) => {
         });
       }
       return;
+    }
+    if (call.participants.size >= maxCallParticipants) {
+      return emitCallError(socket, acknowledge, `Calls currently support up to ${maxCallParticipants} people.`);
     }
     call.invited.delete(user.id);
     call.participants.set(user.id, publicUser(user));
@@ -821,6 +980,23 @@ async function start() {
       joined_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (chat_id, user_id)
     );
+    CREATE TABLE IF NOT EXISTS meetings (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      host_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title varchar(80) NOT NULL,
+      starts_at timestamptz NOT NULL,
+      kind text NOT NULL DEFAULT 'scheduled' CHECK (kind IN ('instant', 'scheduled')),
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    ALTER TABLE meetings ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'scheduled'
+      CHECK (kind IN ('instant', 'scheduled'));
+    CREATE TABLE IF NOT EXISTS meeting_invitees (
+      meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      PRIMARY KEY (meeting_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS meeting_invitees_user_idx
+      ON meeting_invitees(user_id, meeting_id);
     CREATE TABLE IF NOT EXISTS messages (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       chat_id uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
