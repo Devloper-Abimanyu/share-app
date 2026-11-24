@@ -37,20 +37,24 @@ pool.on("error", (error) => console.error("Unexpected PostgreSQL pool error:", e
 const app = express();
 const httpServer = createServer(app);
 const clientOrigin = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
+const clientOrigins = new Set([
+  clientOrigin,
+  "https://orbit-chat.ibotsdeveloper.workers.dev",
+]);
 const cookieSameSite = process.env.COOKIE_SAME_SITE ?? "lax";
 if (!["lax", "none", "strict"].includes(cookieSameSite)) {
   throw new Error("COOKIE_SAME_SITE must be lax, none, or strict.");
 }
 const io = new Server(httpServer, {
-  cors: { origin: clientOrigin, credentials: true },
+  cors: { origin: [...clientOrigins], credentials: true },
   allowRequest: (request, callback) => {
     const origin = request.headers.origin;
-    callback(null, !origin || origin === clientOrigin);
+    callback(null, !origin || clientOrigins.has(origin));
   },
 });
 
 app.use(helmet());
-app.use(cors({ origin: clientOrigin, credentials: true }));
+app.use(cors({ origin: [...clientOrigins], credentials: true }));
 app.use(express.json({ limit: "32kb" }));
 app.use(cookieParser());
 
