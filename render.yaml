@@ -26,6 +26,6 @@ services:
       - key: ADMIN_PASSWORD
         generateValue: true
       - key: CLIENT_ORIGIN
-        value: https://share-app.prabaharan-p.workers.dev
+        value: https://orbit-chat.ibotsdeveloper.workers.dev
       - key: COOKIE_SAME_SITE
         value: none
