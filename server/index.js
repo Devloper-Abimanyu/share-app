@@ -36,11 +36,11 @@ pool.on("error", (error) => console.error("Unexpected PostgreSQL pool error:", e
 const app = express();
 const httpServer = createServer(app);
 
-const clientOrigin = process.env.CLIENT_ORIGIN ??
-  "https://orbit-chat.ibotsdeveloper.workers.dev";
-
 const clientOrigins = new Set([
-  clientOrigin,
+  ...(process.env.CLIENT_ORIGIN ?? "https://orbit-chat.ibotsdeveloper.workers.dev")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean),
   "https://orbit-chat.ibotsdeveloper.workers.dev",
   "http://localhost:5173" // Local development
 ]);
