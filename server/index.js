@@ -33,13 +33,16 @@ const pool = new Pool(process.env.DATABASE_URL
       password: process.env.PGPASSWORD ?? "chat",
     });
 pool.on("error", (error) => console.error("Unexpected PostgreSQL pool error:", error));
-
 const app = express();
 const httpServer = createServer(app);
-const clientOrigin = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
+
+const clientOrigin = process.env.CLIENT_ORIGIN ??
+  "https://orbit-chat.ibotsdeveloper.workers.dev";
+
 const clientOrigins = new Set([
   clientOrigin,
   "https://orbit-chat.ibotsdeveloper.workers.dev",
+  "http://localhost:5173" // Local development
 ]);
 const cookieSameSite = process.env.COOKIE_SAME_SITE ?? "lax";
 if (!["lax", "none", "strict"].includes(cookieSameSite)) {
