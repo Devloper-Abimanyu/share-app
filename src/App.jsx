@@ -14,6 +14,7 @@ import {
   Link2,
   MessageCircle,
   MessageSquarePlus,
+  MonitorUp,
   MoreHorizontal,
   Paperclip,
   Phone,
@@ -398,8 +399,11 @@ function Sidebar({
         <button className={mode === "meetings" ? "active" : ""} onClick={() => onModeChange("meetings")} role="tab">
           <Video size={16} /> Meetings
         </button>
+        <button className={mode === "support" ? "active" : ""} onClick={() => onModeChange("support")} role="tab">
+          <MonitorUp size={16} /> Support
+        </button>
       </div>
-      {mode !== "meetings" && (
+      {mode !== "meetings" && mode !== "support" && (
         <div className="search-box">
           <Search size={16} />
           <input
@@ -467,13 +471,22 @@ function Sidebar({
             </div>
           )}
         </div>
-      ) : (
+      ) : mode === "meetings" ? (
         <div className="sidebar-list">
           <div className="list-heading"><span>MEETINGS</span></div>
           <div className="list-empty">
             <span className="empty-icon"><Video size={19} /></span>
             <strong>Meet your people live</strong>
             <p>Start an instant meeting, schedule one, or join with a meeting link.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="sidebar-list">
+          <div className="list-heading"><span>SUPPORT</span></div>
+          <div className="list-empty">
+            <span className="empty-icon"><MonitorUp size={19} /></span>
+            <strong>Share a live screen</strong>
+            <p>Create a temporary ID and password, or connect to a session.</p>
           </div>
         </div>
       )}
@@ -750,7 +763,17 @@ function EmptyConversation({ onFindPeople, error }) {
   );
 }
 
-function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, onJoin, onOpenMeeting, onBack }) {
+function MeetingsView({
+  meetings,
+  people,
+  user,
+  linkedMeeting,
+  error,
+  onCreate,
+  onJoin,
+  onOpenMeeting,
+  onBack,
+}) {
   const [title, setTitle] = useState("");
   const [startsAt, setStartsAt] = useState(() => dateTimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)));
   const [inviteeIds, setInviteeIds] = useState([]);
@@ -862,6 +885,7 @@ function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, 
       </header>
 
       <div className="meetings-content">
+        <div className="meeting-side-column">
         <section className="meeting-panel">
           <div className="meeting-panel-heading">
             <span className="meeting-panel-icon"><CalendarDays size={20} /></span>
@@ -908,6 +932,7 @@ function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, 
             </button>
           </div>
         </section>
+        </div>
 
         <div className="meeting-main-column">
           <form className="meeting-join-panel" onSubmit={openMeetingLink}>
@@ -924,8 +949,9 @@ function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, 
           {linkedMeeting && (
             <section className="meeting-link-preview">
               <div><span className="eyebrow">MEETING LINK OPENED</span><h2>{linkedMeeting.title}</h2></div>
-              <button className="primary-button meeting-join-button" onClick={() => onJoin(linkedMeeting, "video")} type="button">
-                <Video size={16} /> Join meeting
+              <button className="primary-button meeting-join-button" onClick={() => onJoin(linkedMeeting, linkedMeeting.is_support ? "screen" : "video")} type="button">
+                {linkedMeeting.is_support ? <MonitorUp size={16} /> : <Video size={16} />}
+                {linkedMeeting.is_support ? "Join support session" : "Join meeting"}
               </button>
             </section>
           )}
@@ -947,8 +973,9 @@ function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, 
                         <p className="meeting-card-invitees">With {meeting.invitees.map((invitee) => invitee.displayName).join(", ")}</p>
                       )}
                       <div className="meeting-card-actions">
-                        <button className="primary-button meeting-join-button" onClick={() => onJoin(meeting, "video")} type="button">
-                          <Video size={15} /> Join
+                        <button className="primary-button meeting-join-button" onClick={() => onJoin(meeting, meeting.is_support ? "screen" : "video")} type="button">
+                          {meeting.is_support ? <MonitorUp size={15} /> : <Video size={15} />}
+                          {meeting.is_support ? "Join support" : "Join"}
                         </button>
                         <button className="meeting-copy-button" onClick={() => copyMeetingLink(meeting.id)} type="button">
                           {copiedMeetingId === meeting.id ? <Check size={15} /> : <Copy size={15} />}
@@ -973,11 +1000,138 @@ function MeetingsView({ meetings, people, user, linkedMeeting, error, onCreate, 
   );
 }
 
+function SupportView({ session, onCreateSession, onConnectSession }) {
+  const [credentials, setCredentials] = useState({ sessionId: "", password: "" });
+  const [busy, setBusy] = useState(false);
+  const [createError, setCreateError] = useState("");
+  const [connectError, setConnectError] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  async function createSession() {
+    setCreateError("");
+    setBusy(true);
+    try {
+      await onCreateSession();
+    } catch (createError) {
+      setCreateError(createError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function connect(event) {
+    event.preventDefault();
+    setConnectError("");
+    setBusy(true);
+    try {
+      await onConnectSession({
+        sessionId: credentials.sessionId.trim().toUpperCase(),
+        password: credentials.password,
+      });
+    } catch (connectError) {
+      setConnectError(connectError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyCredentials() {
+    try {
+      await navigator.clipboard.writeText(`${session.sessionId}\n${session.password}`);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch (copyError) {
+      setCreateError(`Could not copy session credentials: ${copyError.message}`);
+    }
+  }
+
+  return (
+    <section className="support-page">
+      <header className="support-page-header">
+        <span className="eyebrow"><MonitorUp size={14} /> ORBIT SUPPORT</span>
+        <h1>Share a live screen.</h1>
+        <p>Start a temporary session or connect with an ID and password. The host chooses what to share; nobody can control the device.</p>
+      </header>
+      <div className="support-page-grid">
+        <section className="support-panel">
+          <div className="meeting-panel-heading">
+            <span className="meeting-panel-icon"><MonitorUp size={20} /></span>
+            <div><h2>Start a session</h2><p>Share these credentials with people you trust.</p></div>
+          </div>
+          {session ? (
+            <div className="support-credentials">
+              <label>
+                Session ID
+                <code>{session.sessionId}</code>
+              </label>
+              <label>
+                Temporary password
+                <code>{session.password}</code>
+              </label>
+              <span className="support-expiry">
+                Expires {new Date(session.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.
+                The password is shown only in this browser session.
+              </span>
+              <button className="secondary-button support-button" onClick={copyCredentials} type="button">
+                {copied ? <Check size={15} /> : <Copy size={15} />}
+                {copied ? "Copied" : "Copy ID and password"}
+              </button>
+            </div>
+          ) : (
+            <p className="support-panel-copy">A new random ID and password will be generated. The session expires after 10 minutes.</p>
+          )}
+          {createError && <p className="meeting-error" role="alert">{createError}</p>}
+          <button className="primary-button support-button" disabled={busy} onClick={createSession} type="button">
+            <MonitorUp size={15} /> {busy ? "Starting…" : session ? "Start a new session" : "Generate session ID"}
+          </button>
+        </section>
+
+        <form className="support-panel support-connect-panel" onSubmit={connect}>
+          <div className="meeting-panel-heading">
+            <span className="meeting-panel-icon"><KeyRound size={20} /></span>
+            <div><h2>Connect to a session</h2><p>Enter the ID and password from the host.</p></div>
+          </div>
+          <label className="meeting-field">
+            <span>SESSION ID</span>
+            <input
+              autoComplete="off"
+              maxLength={12}
+              onChange={(event) => setCredentials((current) => ({ ...current, sessionId: event.target.value.toUpperCase() }))}
+              pattern="[A-Fa-f0-9]{12}"
+              placeholder="12-character ID"
+              required
+              value={credentials.sessionId}
+            />
+          </label>
+          <label className="meeting-field">
+            <span>TEMPORARY PASSWORD</span>
+            <input
+              autoComplete="off"
+              maxLength={128}
+              onChange={(event) => setCredentials((current) => ({ ...current, password: event.target.value }))}
+              placeholder="Enter the session password"
+              required
+              type="password"
+              value={credentials.password}
+            />
+          </label>
+          {connectError && <p className="meeting-error" role="alert">{connectError}</p>}
+          <button className="primary-button support-button" disabled={busy} type="submit">
+            <MonitorUp size={15} /> {busy ? "Connecting…" : "Connect"}
+          </button>
+        </form>
+      </div>
+      <p className="support-safety-note">Screen sharing starts only when the host selects a screen or window in the browser prompt. This is view-only; remote control is not available.</p>
+    </section>
+  );
+}
+
 function ChatApp({ user, onLogout, appError }) {
   const [chats, setChats] = useState([]);
   const [people, setPeople] = useState([]);
   const [meetings, setMeetings] = useState([]);
   const [linkedMeeting, setLinkedMeeting] = useState(null);
+  const [supportSession, setSupportSession] = useState(null);
   const [meetingError, setMeetingError] = useState("");
   const [selectedChatId, setSelectedChatId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -1129,6 +1283,39 @@ function ChatApp({ user, onLogout, appError }) {
     return data.meeting;
   }
 
+  async function startSupportSession() {
+    setMeetingError("");
+    if (!socket?.connected) {
+      throw new Error("Connecting to the support service. Please try again in a moment.");
+    }
+    const data = await api("/api/support-sessions", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    setSupportSession({
+      sessionId: data.sessionId,
+      password: data.password,
+      expiresAt: data.expiresAt,
+    });
+    setLinkedMeeting(data.meeting);
+    setMeetings((current) => [data.meeting, ...current.filter((meeting) => meeting.id !== data.meeting.id)]);
+    setSidebarMode("support");
+  }
+
+  async function connectSupportSession(credentials) {
+    setMeetingError("");
+    if (!socket?.connected) {
+      throw new Error("Connecting to the support service. Please try again in a moment.");
+    }
+    const data = await api("/api/support-sessions/connect", {
+      method: "POST",
+      body: JSON.stringify(credentials),
+    });
+    setMeetings((current) => [data.meeting, ...current.filter((meeting) => meeting.id !== data.meeting.id)]);
+    setSidebarMode("support");
+    joinMeeting(data.meeting, "screen");
+  }
+
   function joinMeeting(meeting, mode) {
     if (!socket?.connected) {
       setMeetingError("Connecting to the meeting service. Please try again in a moment.");
@@ -1139,6 +1326,7 @@ function ChatApp({ user, onLogout, appError }) {
       requestId: crypto.randomUUID(),
       meetingId: meeting.id,
       meetingTitle: meeting.title,
+      ...(mode === "screen" ? { supportHostId: meeting.host?.id } : {}),
       mode,
       status: "outgoing",
       participants: [],
@@ -1247,7 +1435,7 @@ function ChatApp({ user, onLogout, appError }) {
         mode={sidebarMode}
         onModeChange={(mode) => {
           setSidebarMode(mode);
-          if (mode === "meetings") setSelectedChatId(null);
+          if (mode === "meetings" || mode === "support") setSelectedChatId(null);
         }}
       />
       {sidebarMode === "meetings" ? (
@@ -1261,6 +1449,12 @@ function ChatApp({ user, onLogout, appError }) {
           onBack={() => setSidebarMode("chats")}
           people={people}
           user={user}
+        />
+      ) : sidebarMode === "support" ? (
+        <SupportView
+          session={supportSession}
+          onCreateSession={startSupportSession}
+          onConnectSession={connectSupportSession}
         />
       ) : selectedChat ? (
         <ChatView

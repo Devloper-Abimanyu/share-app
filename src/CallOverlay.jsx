@@ -54,6 +54,7 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
   callRef.current = call;
   localStreamRef.current = localStream;
   screenStreamRef.current = screenStream;
+  const isSupportHost = call.mode === "screen" && call.supportHostId === user.id;
 
   const sendSignal = useCallback((peerId, signal) => {
     const activeCallId = callRef.current.callId;
@@ -135,10 +136,12 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
   const acceptIncomingCall = useCallback(async () => {
     setCallError("");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: call.mode === "video",
-      });
+      const stream = call.mode === "screen"
+        ? new MediaStream()
+        : await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: call.mode === "video",
+          });
       localStreamRef.current = stream;
       setLocalStream(stream);
       const response = await emitWithAck(socket, "call:join", { callId: call.callId });
@@ -162,13 +165,15 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
 
     async function startCall() {
       try {
-        if (!navigator.mediaDevices?.getUserMedia) {
+        if (call.mode !== "screen" && !navigator.mediaDevices?.getUserMedia) {
           throw new Error("Camera and microphone access is not available in this browser.");
         }
-        pendingStream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: call.mode === "video",
-        });
+        pendingStream = call.mode === "screen"
+          ? new MediaStream()
+          : await navigator.mediaDevices.getUserMedia({
+              audio: true,
+              video: call.mode === "video",
+            });
         if (cancelled) {
           stopStream(pendingStream);
           return;
@@ -400,18 +405,34 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
     onClose();
   }
 
-  const title = call.meetingTitle || call.chatName || call.caller?.displayName || call.chatTitle || "Orbit call";
-  const callStatus = call.status === "incoming"
-    ? `${call.mode === "video" ? "Video" : "Voice"} ${call.meetingId ? "meeting" : "call"} from ${call.caller?.displayName ?? "your friend"}`
-    : call.status === "outgoing"
-      ? "Getting your camera and microphone ready…"
-      : call.status === "ringing"
-        ? "Calling…"
-        : call.status === "ended"
-          ? call.endReason === "no-answer" ? "No one answered." : "Call ended"
-          : call.status === "failed"
-            ? "Could not start the call."
-            : `${displayCallTime(elapsedSeconds)} · ${remotePeers.length ? "Connected" : "Waiting for others…"}`;
+  const title = call.mode === "screen"
+    ? "Live screen support"
+    : call.meetingTitle || call.chatName || call.caller?.displayName || call.chatTitle || "Orbit call";
+  const callStatus = call.mode === "screen"
+    ? call.status === "incoming"
+      ? `Connection request from ${call.caller?.displayName ?? "an Orbit user"}`
+      : call.status === "outgoing"
+        ? "Connecting to support session…"
+        : call.status === "ringing"
+          ? "Waiting for someone to connect…"
+          : call.status === "ended"
+            ? "Support session ended."
+            : call.status === "failed"
+              ? "Could not connect to support session."
+              : remotePeers.some((peer) => peer.stream.getVideoTracks().some((track) => track.readyState === "live"))
+                ? "Live screen connected"
+                : isSupportHost ? "Connected. Choose Share screen to begin." : "Waiting for the host to share a screen…"
+    : call.status === "incoming"
+      ? `${call.mode === "video" ? "Video" : "Voice"} ${call.meetingId ? "meeting" : "call"} from ${call.caller?.displayName ?? "your friend"}`
+      : call.status === "outgoing"
+        ? "Getting your camera and microphone ready…"
+        : call.status === "ringing"
+          ? "Calling…"
+          : call.status === "ended"
+            ? call.endReason === "no-answer" ? "No one answered." : "Call ended"
+            : call.status === "failed"
+              ? "Could not start the call."
+              : `${displayCallTime(elapsedSeconds)} · ${remotePeers.length ? "Connected" : "Waiting for others…"}`;
 
   return (
     <div className="call-backdrop">
@@ -421,12 +442,12 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
         role="dialog"
       >
         <header className="call-header">
-          <div className="call-header-brand"><span className="brand-mark"><Phone size={16} fill="currentColor" /></span><span>orbit<span className="brand-period">.</span></span></div>
+          <div className="call-header-brand"><span className="brand-mark">{call.mode === "screen" ? <MonitorUp size={16} /> : <Phone size={16} fill="currentColor" />}</span><span>orbit<span className="brand-period">.</span></span></div>
           <div className="call-header-name">
             <strong>{title}</strong>
             <span className={call.status === "active" ? "call-connected" : ""}>{callStatus}</span>
           </div>
-          <button className="call-close" onClick={closeCall} aria-label="Close call"><X size={19} /></button>
+          <button className="call-close" onClick={closeCall} aria-label={call.mode === "screen" ? "Close support session" : "Close call"}><X size={19} /></button>
         </header>
 
         {call.status === "incoming" ? (
@@ -435,15 +456,15 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
               {(call.caller?.displayName ?? "?").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}
               <span className="call-ring" />
             </div>
-            <span className="call-eyebrow">INCOMING {call.mode === "video" ? "VIDEO" : "VOICE"} CALL</span>
-            <h2>{call.caller?.displayName ?? "Someone"} is calling</h2>
-            <p>{call.chatName || "Pick up and say hello."}</p>
+            <span className="call-eyebrow">{call.mode === "screen" ? "SUPPORT CONNECTION" : `INCOMING ${call.mode === "video" ? "VIDEO" : "VOICE"} CALL`}</span>
+            <h2>{call.mode === "screen" ? `${call.caller?.displayName ?? "Someone"} wants to connect` : `${call.caller?.displayName ?? "Someone"} is calling`}</h2>
+            <p>{call.mode === "screen" ? "Accept to view the screen only after the host chooses to share it." : call.chatName || "Pick up and say hello."}</p>
             {callError && <p className="call-error" role="alert">{callError}</p>}
             <div className="call-actions">
               <button className="call-action call-decline" onClick={declineCall} aria-label="Decline call"><PhoneOff size={20} /></button>
-              <button className="call-action call-accept" onClick={acceptIncomingCall} aria-label="Accept call"><Phone size={20} /></button>
+              <button className="call-action call-accept" onClick={acceptIncomingCall} aria-label={call.mode === "screen" ? "Accept support connection" : "Accept call"}>{call.mode === "screen" ? <MonitorUp size={20} /> : <Phone size={20} />}</button>
             </div>
-            <div className="call-action-labels"><span>Decline</span><span>Answer</span></div>
+            <div className="call-action-labels"><span>Decline</span><span>{call.mode === "screen" ? "Connect" : "Answer"}</span></div>
           </div>
         ) : call.status === "ended" || call.status === "failed" ? (
           <div className="call-ended">
@@ -495,14 +516,16 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
 
         {call.status !== "incoming" && call.status !== "ended" && call.status !== "failed" && (
           <footer className="call-controls">
-            <button className={`call-control ${microphoneEnabled ? "" : "call-control-off"}`}
-              disabled={!localStream}
-              onClick={toggleMicrophone}
-              title={microphoneEnabled ? "Mute microphone" : "Unmute microphone"}
-              aria-label={microphoneEnabled ? "Mute microphone" : "Unmute microphone"}>
-              {microphoneEnabled ? <Mic size={19} /> : <MicOff size={19} />}
-              <span>{microphoneEnabled ? "Mute" : "Unmute"}</span>
-            </button>
+            {call.mode !== "screen" && (
+              <button className={`call-control ${microphoneEnabled ? "" : "call-control-off"}`}
+                disabled={!localStream}
+                onClick={toggleMicrophone}
+                title={microphoneEnabled ? "Mute microphone" : "Unmute microphone"}
+                aria-label={microphoneEnabled ? "Mute microphone" : "Unmute microphone"}>
+                {microphoneEnabled ? <Mic size={19} /> : <MicOff size={19} />}
+                <span>{microphoneEnabled ? "Mute" : "Unmute"}</span>
+              </button>
+            )}
             {call.mode === "video" && (
               <button className={`call-control ${cameraEnabled ? "" : "call-control-off"}`}
                 disabled={!localStream}
@@ -513,18 +536,23 @@ export default function CallOverlay({ call, socket, user, onChange, onClose }) {
                 <span>Camera</span>
               </button>
             )}
-            <button className={`call-control ${screenStream ? "call-control-sharing" : ""}`}
-              disabled={!localStream || call.status === "outgoing"}
-              onClick={screenStream ? () => stopScreenShare().catch((error) => setCallError(error.message)) : shareScreen}
-              title={screenStream ? "Stop sharing screen" : "Share your screen"}
-              aria-label={screenStream ? "Stop sharing screen" : "Share your screen"}>
-              <MonitorUp size={19} />
-              <span>{screenStream ? "Stop share" : "Share screen"}</span>
-            </button>
-            <button className="call-end-button" onClick={closeCall} title="End call" aria-label="End call">
-              {call.status === "outgoing" || call.status === "ringing"
-                ? <PhoneOff size={19} />
-                : <Phone size={19} className="call-hangup-icon" />}
+            {call.mode !== "screen" || isSupportHost ? (
+              <button className={`call-control ${screenStream ? "call-control-sharing" : ""}`}
+                disabled={(!localStream && call.mode !== "screen") || call.status === "outgoing"}
+                onClick={screenStream ? () => stopScreenShare().catch((error) => setCallError(error.message)) : shareScreen}
+                title={screenStream ? "Stop sharing screen" : "Share your screen"}
+                aria-label={screenStream ? "Stop sharing screen" : "Share your screen"}>
+                <MonitorUp size={19} />
+                <span>{screenStream ? "Stop share" : "Share screen"}</span>
+              </button>
+            ) : null}
+            <button className="call-end-button" onClick={closeCall} title={call.mode === "screen" ? "Leave support session" : "End call"} aria-label={call.mode === "screen" ? "Leave support session" : "End call"}>
+              {call.mode === "screen"
+                ? <X size={19} />
+                : call.status === "outgoing" || call.status === "ringing"
+                  ? <PhoneOff size={19} />
+                  : <Phone size={19} className="call-hangup-icon" />}
+              {call.mode === "screen" && <span>Leave</span>}
             </button>
           </footer>
         )}

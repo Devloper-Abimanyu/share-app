@@ -7,7 +7,7 @@ import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
 import jwt from "jsonwebtoken";
 import pg from "pg";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { Server } from "socket.io";
 
@@ -15,6 +15,7 @@ const { Pool } = pg;
 const port = Number(process.env.PORT ?? 3001);
 const maxAttachmentBytes = 50 * 1024 * 1024;
 const maxCallParticipants = 6;
+const supportInviteLifetimeMs = 10 * 60 * 1000;
 const jwtSecret = process.env.JWT_SECRET;
 const cookieName = "orbit_session";
 const tokenLifetime = "7d";
@@ -69,6 +70,18 @@ const attachmentBodyParser = express.raw({
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const supportInviteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const supportConnectLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
@@ -288,6 +301,7 @@ app.get("/api/users", authenticate, asyncRoute(async (req, res) => {
 }));
 
 const meetingSelect = `SELECT m.id, m.title, m.kind, m.starts_at, m.created_at,
+  EXISTS (SELECT 1 FROM support_invites si WHERE si.meeting_id = m.id) AS is_support,
   json_build_object(
     'id', host.id, 'username', host.username,
     'displayName', host.display_name, 'role', host.role
@@ -378,6 +392,106 @@ app.post("/api/meetings", authenticate, asyncRoute(async (req, res) => {
     return created.rows[0].id;
   });
   res.status(201).json({ meeting: await getMeeting(meetingId) });
+}));
+
+function hashSupportToken(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+async function addSupportInvitee(client, meetingId, userId) {
+  const alreadyAccepted = await client.query(
+    `SELECT 1 FROM support_invitees
+     WHERE meeting_id = $1 AND user_id = $2`,
+    [meetingId, userId],
+  );
+  if (alreadyAccepted.rowCount) return;
+
+  const acceptedCount = await client.query(
+    "SELECT count(*) FROM support_invitees WHERE meeting_id = $1",
+    [meetingId],
+  );
+  if (Number(acceptedCount.rows[0].count) >= maxCallParticipants - 1) {
+    const error = new Error("This support session has reached its six-person limit.");
+    error.status = 409;
+    throw error;
+  }
+  await client.query(
+    `INSERT INTO support_invitees (meeting_id, user_id)
+     VALUES ($1, $2)`,
+    [meetingId, userId],
+  );
+  await client.query(
+    `INSERT INTO meeting_invitees (meeting_id, user_id)
+     VALUES ($1, $2)`,
+    [meetingId, userId],
+  );
+}
+
+app.post("/api/support-sessions", authenticate, supportInviteLimiter, asyncRoute(async (req, res) => {
+  const tokenHash = hashSupportToken(randomBytes(32).toString("base64url"));
+  const sessionId = randomBytes(6).toString("hex").toUpperCase();
+  const password = randomBytes(12).toString("base64url");
+  const passwordHash = await bcrypt.hash(password, 12);
+  const expiresAt = new Date(Date.now() + supportInviteLifetimeMs);
+  const meetingId = await withTransaction(async (client) => {
+    const created = await client.query(
+      `INSERT INTO meetings (host_id, title, starts_at, kind)
+       VALUES ($1, 'Orbit support session', now(), 'instant')
+       RETURNING id`,
+      [req.user.id],
+    );
+    const id = created.rows[0].id;
+    await client.query(
+      `INSERT INTO support_invites (token_hash, meeting_id, expires_at, session_id, password_hash)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [tokenHash, id, expiresAt, sessionId, passwordHash],
+    );
+    return id;
+  });
+  res.status(201).json({
+    sessionId,
+    password,
+    expiresAt,
+    meeting: await getMeeting(meetingId),
+  });
+}));
+
+app.post("/api/support-sessions/connect", authenticate, supportConnectLimiter, asyncRoute(async (req, res) => {
+  const sessionId = String(req.body.sessionId ?? "").trim().toUpperCase();
+  const password = String(req.body.password ?? "");
+  if (!/^[0-9A-F]{12}$/.test(sessionId) || password.length < 1 || password.length > 128) {
+    return res.status(401).json({ error: "The support ID or password is incorrect." });
+  }
+
+  const meetingId = await withTransaction(async (client) => {
+    const result = await client.query(
+      `SELECT si.meeting_id, si.expires_at, si.password_hash, m.host_id
+       FROM support_invites si
+       JOIN meetings m ON m.id = si.meeting_id
+       WHERE si.session_id = $1
+       FOR UPDATE OF si`,
+      [sessionId],
+    );
+    const invite = result.rows[0];
+    if (!invite || !invite.password_hash || !(await bcrypt.compare(password, invite.password_hash))) {
+      const error = new Error("The support ID or password is incorrect.");
+      error.status = 401;
+      throw error;
+    }
+    if (new Date(invite.expires_at) <= new Date()) {
+      const error = new Error("This support session has expired.");
+      error.status = 410;
+      throw error;
+    }
+    if (invite.host_id === req.user.id) {
+      const error = new Error("You cannot connect to your own support session.");
+      error.status = 400;
+      throw error;
+    }
+    await addSupportInvitee(client, invite.meeting_id, req.user.id);
+    return invite.meeting_id;
+  });
+  res.json({ meeting: await getMeeting(meetingId) });
 }));
 
 app.get("/api/chats", authenticate, asyncRoute(async (req, res) => {
@@ -613,6 +727,9 @@ app.use((error, _req, res, _next) => {
   if (error.status === 413 && error.type === "entity.too.large") {
     return res.status(413).json({ error: "Files must be 50 MB or smaller." });
   }
+  if (error.status >= 400 && error.status < 500) {
+    return res.status(error.status).json({ error: error.message });
+  }
   console.error(error);
   if (error.type === "entity.too.large") {
     return res.status(413).json({ error: "Files must be 50 MB or smaller." });
@@ -706,8 +823,9 @@ io.on("connection", async (socket) => {
     try {
       const validId = (value) => typeof value === "string" &&
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-      if (!["audio", "video"].includes(mode) ||
+      if (!["audio", "video", "screen"].includes(mode) ||
           (Boolean(chatId) === Boolean(meetingId)) ||
+          (mode === "screen" && !meetingId) ||
           (chatId && !validId(chatId)) || (meetingId && !validId(meetingId))) {
         return emitCallError(socket, acknowledge, "Choose a valid conversation or meeting and call type.");
       }
@@ -718,21 +836,42 @@ io.on("connection", async (socket) => {
       }
 
       let chatName = null;
+      let supportHostId = null;
       let invitedMembers;
       if (meetingId) {
         const meetingResult = await pool.query(
-          `SELECT m.title, m.host_id, u.id, u.username, u.display_name, u.role
+          `SELECT m.title, m.host_id, u.id, u.username, u.display_name, u.role,
+             (si.meeting_id IS NOT NULL) AS is_support,
+             si.expires_at AS support_expires_at,
+             EXISTS (
+               SELECT 1 FROM support_invitees accepted
+               WHERE accepted.meeting_id = m.id AND accepted.user_id = $2
+             ) AS is_support_invited
            FROM meetings m
            JOIN users u ON u.id = m.host_id
+           LEFT JOIN support_invites si ON si.meeting_id = m.id
            WHERE m.id = $1`,
-          [meetingId],
+          [meetingId, user.id],
         );
         if (!meetingResult.rowCount) return emitCallError(socket, acknowledge, "Meeting not found.");
         const meeting = meetingResult.rows[0];
         chatName = meeting.title;
+        if (meeting.is_support) supportHostId = meeting.host_id;
+        if (meeting.is_support && new Date(meeting.support_expires_at) <= new Date()) {
+          return emitCallError(socket, acknowledge, "This support session has expired.");
+        }
+        if ((meeting.is_support && mode !== "screen") || (!meeting.is_support && mode === "screen")) {
+          return emitCallError(socket, acknowledge, "Choose the call type for this meeting.");
+        }
+        if (meeting.is_support && user.id !== meeting.host_id && !meeting.is_support_invited) {
+          return emitCallError(socket, acknowledge, "Connect to the support session before joining.");
+        }
 
         const existingMeetingCall = [...activeCalls.values()].find((call) => call.meetingId === meetingId);
         if (existingMeetingCall) {
+          if (existingMeetingCall.mode !== mode) {
+            return emitCallError(socket, acknowledge, "This meeting is already using a different call type.");
+          }
           if (existingMeetingCall.participants.has(user.id)) {
             return emitCallError(socket, acknowledge, "You are already in this meeting.");
           }
@@ -746,6 +885,7 @@ io.on("connection", async (socket) => {
               meetingId,
               chatName,
               mode,
+              supportHostId,
               participants: [...existingMeetingCall.participants.values()],
               joinExisting: true,
             });
@@ -797,6 +937,7 @@ io.on("connection", async (socket) => {
         meetingId: meetingId ?? null,
         chatName,
         mode,
+        supportHostId,
         callerId: user.id,
         participants,
         invited: new Set(invitedMembers.map((member) => member.id)),
@@ -814,6 +955,7 @@ io.on("connection", async (socket) => {
           chatName: call.chatName,
           meetingTitle: meetingId ? call.chatName : null,
           mode,
+          supportHostId,
           caller,
         });
       }
@@ -825,6 +967,7 @@ io.on("connection", async (socket) => {
           chatName: call.chatName,
           meetingTitle: meetingId ? call.chatName : null,
           mode,
+          supportHostId,
           participants: invitedMembers.map(publicUser),
         });
       }
@@ -1000,6 +1143,24 @@ async function start() {
     CREATE TABLE IF NOT EXISTS meeting_invitees (
       meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
       user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      PRIMARY KEY (meeting_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS support_invites (
+      token_hash text PRIMARY KEY,
+      meeting_id uuid NOT NULL UNIQUE REFERENCES meetings(id) ON DELETE CASCADE,
+      expires_at timestamptz NOT NULL,
+      session_id text,
+      password_hash text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    ALTER TABLE support_invites ADD COLUMN IF NOT EXISTS session_id text;
+    ALTER TABLE support_invites ADD COLUMN IF NOT EXISTS password_hash text;
+    CREATE UNIQUE INDEX IF NOT EXISTS support_invites_session_id_idx
+      ON support_invites(session_id) WHERE session_id IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS support_invitees (
+      meeting_id uuid NOT NULL REFERENCES support_invites(meeting_id) ON DELETE CASCADE,
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      accepted_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (meeting_id, user_id)
     );
     CREATE INDEX IF NOT EXISTS meeting_invitees_user_idx

@@ -61,6 +61,8 @@ Scheduled meetings and invitations are stored in PostgreSQL. Live audio/video us
 
 Start a voice or video call from a conversation header. Group calls support up to six people. During a call, use **Share screen** to present a screen or window; the browser will ask you to choose what to share. Calls require camera and microphone permission, and screen sharing requires a secure browser context (localhost or HTTPS).
 
+For support, open **Support** and create a session to generate a temporary ID and password, or enter credentials to connect. Sessions expire after 10 minutes and allow up to six signed-in participants. The host chooses what to share in the browser prompt; viewers cannot control the device. Support sessions do not request camera or microphone access.
+
 Calls use peer-to-peer WebRTC with a public STUN server. Some networks require a TURN relay to connect; production deployments should configure a trusted TURN service and review its access, privacy, and cost policies. The development setup does not include TURN.
 
 Messages and file attachments are stored in PostgreSQL and delivered live to connected members. Attachments accept any file type, are downloaded rather than rendered inline, and are limited to 50 MB each; storing files in PostgreSQL can consume database capacity quickly. This MVP does not provide end-to-end encryption, push notifications, or message editing/deletion. Do not use it for sensitive conversations without a security review and a production deployment plan.

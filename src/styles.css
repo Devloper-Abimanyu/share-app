@@ -541,18 +541,36 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 /* Meetings */
 .meetings-page { min-width: 0; height: 100%; overflow-y: auto; padding: 38px clamp(22px, 4vw, 58px); background: #fbfaff; }
+.support-page { min-width: 0; height: 100%; overflow-y: auto; padding: 38px clamp(22px, 4vw, 58px); background: #fbfaff; }
+.support-page-header { max-width: 1100px; margin: 0 auto 25px; }
+.support-page-header .eyebrow { color: var(--purple); }
+.support-page-header h1 { margin: 12px 0 7px; color: #343348; font-family: "Manrope", sans-serif; font-size: clamp(24px, 3vw, 34px); letter-spacing: -1.4px; }
+.support-page-header p { max-width: 650px; margin: 0; color: #9191a0; font-size: 12px; line-height: 1.7; }
+.support-page-grid { display: grid; max-width: 1100px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 18px; margin: 0 auto; }
+.support-page-grid .support-panel { padding: 22px; }
+.support-page-grid .meeting-field { margin: 16px 0; }
+.support-credentials { display: grid; gap: 11px; }
+.support-credentials label { display: grid; gap: 6px; color: #7d7b8e; font-size: 10px; font-weight: 700; }
+.support-credentials code { overflow-wrap: anywhere; padding: 11px 12px; border: 1px solid #eae8f0; border-radius: 9px; background: #faf9fd; color: #514d69; font-size: 14px; letter-spacing: .5px; user-select: all; }
+.support-expiry { color: #89879a; font-size: 10px; line-height: 1.6; }
+.support-safety-note { max-width: 1100px; margin: 17px auto; color: #89879a; font-size: 10px; line-height: 1.6; }
 .meetings-header { margin: 0 auto 28px; max-width: 1160px; }
 .meetings-back-button { display: none; }
 .meetings-header .eyebrow { gap: 7px; color: var(--purple); }
 .meetings-header h1 { margin: 12px 0 7px; color: #343348; font-family: "Manrope", sans-serif; font-size: clamp(24px, 3vw, 34px); letter-spacing: -1.4px; }
 .meetings-header p { margin: 0; color: #9191a0; font-size: 12px; line-height: 1.6; }
 .meetings-content { display: grid; max-width: 1160px; grid-template-columns: minmax(260px, 330px) minmax(0, 1fr); align-items: start; gap: 20px; margin: 0 auto; }
-.meeting-panel, .meeting-join-panel, .meeting-link-preview, .meeting-card { border: 1px solid #efedf5; border-radius: 16px; background: #fff; box-shadow: 0 8px 26px #28204d07; }
+.meeting-panel, .support-panel, .meeting-join-panel, .meeting-link-preview, .meeting-card { border: 1px solid #efedf5; border-radius: 16px; background: #fff; box-shadow: 0 8px 26px #28204d07; }
+.meeting-side-column { display: grid; gap: 16px; }
 .meeting-panel { padding: 20px; }
-.meeting-panel-heading { display: flex; align-items: center; gap: 11px; margin-bottom: 20px; }
+.support-panel { padding: 20px; border-color: #ded8f5; background: linear-gradient(145deg, #fff, #faf8ff); }
+.meeting-panel-heading { display: grid;
+grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 11px; margin-bottom: 20px; }
 .meeting-panel-icon { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; border-radius: 13px; background: #f3efff; color: var(--purple); }
 .meeting-panel-heading h2, .meeting-link-preview h2 { margin: 0; color: #3c3b50; font-family: "Manrope", sans-serif; font-size: 15px; letter-spacing: -.3px; }
 .meeting-panel-heading p { margin: 4px 0 0; color: #9999a8; font-size: 10px; }
+.support-panel-copy { display: block; margin: -7px 0 13px; color: #89879a; font-size: 10px; line-height: 1.6; }
+.support-button { min-height: 36px; justify-content: center; margin: 10px 0 0; padding: 0 10px; font-size: 10px; }
 .meeting-field { display: grid; gap: 7px; margin: 14px 0; color: #7d7b8e; font-size: 9px; font-weight: 700; letter-spacing: .8px; }
 .meeting-field input, .meeting-join-panel input { width: 100%; min-width: 0; height: 41px; padding: 0 11px; border: 1px solid #eae8f0; border-radius: 9px; outline: none; color: #414055; font-size: 11px; letter-spacing: 0; }
 .meeting-field input:focus, .meeting-join-panel input:focus { border-color: #b6a7ef; box-shadow: 0 0 0 3px #7757e810; }
@@ -716,6 +734,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .call-control.call-control-off > svg { border-color: #e76d7d55; background: #a43d50; color: #fff; }
 .call-control.call-control-sharing > svg { border-color: #8d78e777; background: #6a52c3; color: #fff; }
 .call-end-button { display: grid; width: 53px; height: 46px; place-items: center; margin-left: 7px; border: 0; border-radius: 16px; background: #e45b6f; color: #fff; cursor: pointer; }
+.call-end-button span { font-size: 8px; line-height: 1; }
 .call-end-button:hover { background: #cd465b; }
 .call-hangup-icon { transform: rotate(135deg); }
 .call-error, .call-notice { max-width: min(430px, 90%); padding: 9px 13px; border: 1px solid #ee718144; border-radius: 9px; background: #722e3cce; color: #ffdce2 !important; font-size: 10px !important; line-height: 1.5; }
@@ -761,6 +780,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   .sidebar-hidden-mobile { display: none; }
   .conversation { position: absolute; inset: 0; width: 100%; }
   .meetings-page { position: absolute; z-index: 3; inset: 0; height: 100dvh; padding: calc(20px + env(safe-area-inset-top)) 14px calc(22px + env(safe-area-inset-bottom)); overscroll-behavior: contain; }
+  .support-page { position: absolute; z-index: 3; inset: 0; height: 100dvh; padding: calc(20px + env(safe-area-inset-top)) 14px calc(22px + env(safe-area-inset-bottom)); overscroll-behavior: contain; }
+  .support-page-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .support-page-grid .support-panel { padding: 15px; border-radius: 14px; }
+  .support-page .meeting-field input { height: 44px; font-size: 16px; }
+  .support-page-header { margin-bottom: 16px; }
+  .support-page-header h1 { font-size: clamp(23px, 7vw, 29px); line-height: 1.15; }
   .meetings-header { margin-bottom: 16px; }
   .meetings-header h1 { font-size: clamp(23px, 7vw, 29px); line-height: 1.15; }
   .meetings-back-button { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 16px; padding: 9px 11px; border: 1px solid #e8e3f7; border-radius: 9px; background: #fff; color: #7562bd; font-size: 11px; font-weight: 700; }
