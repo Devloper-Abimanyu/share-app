@@ -32,7 +32,7 @@ import CallOverlay from "./CallOverlay.jsx";
 
 const apiBaseUrl = (
   import.meta.env.VITE_API_URL ||
-  (import.meta.env.PROD ? "https://orbit-chat-api.onrender.com" : "")
+  (import.meta.env.PROD ? "https://orbit-chat-api-free.onrender.com" : "")
 ).replace(/\/+$/, "");
 const maxAttachmentBytes = 50 * 1024 * 1024;
 
